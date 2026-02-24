@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # SteelCheck
 
 Verificación de perfiles metálicos según **CIRSOC 301 / AISC 360-10**.
@@ -115,3 +116,7 @@ Verificar que existan:
 | Python | 3.10 – 3.12 |
 | pandas | ≥ 2.0 |
 | numpy | ≥ 1.24 |
+=======
+# perfiles-verificacion
+Verificación en ELU/ELS de perfiles AISC/CIRSOC
+>>>>>>> f17b27bed5e509bccb0abb3a8d01a8ff83b30b63
