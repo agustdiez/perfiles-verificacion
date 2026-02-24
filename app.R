@@ -249,6 +249,20 @@ ui <- page_fluid(
       font-family:'IBM Plex Mono',monospace !important;
       font-size:11px !important; margin-top:6px;
     }
+    .btn-export:hover { 
+      background:#1a1f2e !important; 
+      border-color:#94a3b8 !important; 
+    }
+    .btn-latex {
+      width:100%; background:transparent !important;
+      border:1px solid #2a2f3f !important; color:#3ecf8e !important;
+      font-family:'IBM Plex Mono',monospace !important;
+      font-size:11px !important; margin-top:6px;
+    }
+    .btn-latex:hover { 
+      background:#1a2f26 !important; 
+      border-color:#3ecf8e !important; 
+    }
     .advertencia-box {
       background:#1a1206; border:1px solid #f59e0b; border-radius:3px;
       padding:8px 10px; font-family:'IBM Plex Mono',monospace;
@@ -435,7 +449,8 @@ ui <- page_fluid(
       ),
 
       actionButton("btn_graficar", "GRAFICAR", class="btn btn-primary btn-graficar"),
-      downloadButton("btn_exportar", "Exportar verbose", class="btn btn-export")
+      downloadButton("btn_exportar", "Exportar verbose", class="btn btn-export"),
+      actionButton("btn_latex", "Ver LaTeX", class="btn btn-latex")
     )
   ),
 
@@ -548,178 +563,205 @@ server <- function(input, output, session) {
   })
 
   modal_propiedades <- function(perfil_nombre, color) {
-    pd <- obtener_props_display(perfil_nombre)
-    if (is.null(pd)) {
-      return(showModal(modalDialog(title=perfil_nombre,
-        "No se pudieron obtener las propiedades.", easyClose=TRUE,
-        footer=modalButton("Cerrar"))))
+    props <- obtener_props_display(perfil_nombre)
+    if (is.null(props)) {
+      showModal(modalDialog(
+        title = paste("Propiedades —", perfil_nombre),
+        "Error al cargar propiedades del perfil.",
+        easyClose = TRUE, footer = modalButton("Cerrar")
+      ))
+      return(NULL)
     }
-    badge <- tags$span(class="props-badge",
-      style=paste0("background:",color,"22;color:",color,";border:1px solid ",color,"44;"),
-      pd$familia)
-    secs <- list(
-      list(k="basicas",      t="Dimensiones y masa"),
-      list(k="flexion",      t="Flexion"),
-      list(k="torsion",      t="Torsion"),
-      list(k="seccion",      t="Esbeltez de seccion"),
-      list(k="centro_corte", t="Centro de corte")
-    )
-    filas <- lapply(secs, function(s)
-      render_props_seccion(pd[[s$k]], pd[[paste0(s$k,"_uds")]], s$t))
+
+    familia <- props$familia
+    tipo    <- props$tipo
+    unidades_basicas    <- list(Ag="cm²", d="mm", bf="mm", tw="mm", tf="mm", A="mm", B="mm", e="mm", Peso="kg/m")
+    unidades_flexion    <- list(Ix="cm⁴", Iy="cm⁴", Sx="cm³", Sy="cm³", Zx="cm³", Zy="cm³",
+                                rx="cm", ry="cm", iv="cm", xp="cm", yp="cm")
+    unidades_torsion    <- list(J="cm⁴", Cw="cm⁶", ro="cm")
+    unidades_corte      <- list(xo="cm", yo="cm", eo="cm", H="-")
+    unidades_clasif     <- list()
+
+    badge_color <- switch(familia, DOBLE_T="#4a9eff", CANAL="#3ecf8e", ANGULAR="#e8523a", "#64748b")
+    modal_titulo <- paste0(perfil_nombre, "  —  ", tipo)
+
     showModal(modalDialog(
-      title=tagList(
-        tags$span(style=paste0("font-family:'IBM Plex Mono',monospace;color:",color,";font-size:14px;font-weight:700;"), perfil_nombre),
-        tags$span(style="font-size:10px;color:#475569;margin-left:10px;", input$db_activa)
-      ),
-      tagList(badge, tags$table(class="props-table",
-        do.call(tagList, Filter(Negate(is.null), filas)))),
-      easyClose=TRUE, footer=modalButton("Cerrar"), size="m"
+      title = modal_titulo, size = "l", easyClose = TRUE,
+      footer = modalButton("Cerrar"),
+      div(style="max-height:500px;overflow-y:auto;",
+        tags$span(class="props-badge", style=paste0("background:",badge_color,";color:white;"), familia),
+        tags$table(class="props-table",
+          render_props_seccion(props$basicas,       unidades_basicas,    "PROPIEDADES BASICAS"),
+          render_props_seccion(props$flexion,       unidades_flexion,    "FLEXION"),
+          render_props_seccion(props$torsion,       unidades_torsion,    "TORSION"),
+          render_props_seccion(props$centro_corte,  unidades_corte,      "CENTRO DE CORTE"),
+          render_props_seccion(props$clasificacion, unidades_clasif,     "CLASIFICACION")
+        )
+      )
     ))
   }
 
-  observeEvent(input$btn_props1, { req(input$perf1);               modal_propiedades(input$perf1,"#e8523a") })
-  observeEvent(input$btn_props2, { req(input$perf2,input$usar_p2); modal_propiedades(input$perf2,"#4a9eff") })
-  observeEvent(input$btn_props3, { req(input$perf3,input$usar_p3); modal_propiedades(input$perf3,"#3ecf8e") })
+  observeEvent(input$btn_props1, { modal_propiedades(input$perf1, "#e8523a") })
+  observeEvent(input$btn_props2, { req(input$usar_p2); modal_propiedades(input$perf2, "#4a9eff") })
+  observeEvent(input$btn_props3, { req(input$usar_p3); modal_propiedades(input$perf3, "#3ecf8e") })
 
-  datos_grafico <- eventReactive(input$btn_graficar, {
-    perfiles <- list(list(nombre=input$perf1, color="#e8523a", activo=TRUE))
-    if (isTRUE(input$usar_p2) && nchar(input$perf2) > 0)
-      perfiles[[2]] <- list(nombre=input$perf2, color="#4a9eff", activo=TRUE)
-    if (isTRUE(input$usar_p3) && nchar(input$perf3) > 0)
-      perfiles[[3]] <- list(nombre=input$perf3, color="#3ecf8e", activo=TRUE)
-
-    L_mm  <- input$L_punto  * 1000
-    Lb_mm <- input$Lb_punto * 1000
-
-    withProgress(message="Calculando...", value=0, {
-      c_pd <- list(); pt_pd <- list()
-      c_md <- list(); pt_md <- list()
-      ints  <- list()
-      n_tot <- length(perfiles) * 2
-
-      for (i in seq_along(perfiles)) {
-        p <- perfiles[[i]]
-        if (!p$activo) next
-
-        incProgress(1/n_tot, detail=paste("Pd:", p$nombre))
-        c_pd[[i]] <- generar_curva_Pd(p$nombre, input$Fy, input$Kx, input$Ky, input$Kz)
-        c_pd[[i]]$color <- p$color
-
-        incProgress(1/n_tot, detail=paste("Md:", p$nombre))
-        c_md[[i]] <- generar_curva_Md(p$nombre, input$Fy)
-        c_md[[i]]$color <- p$color
-
-        KL_max <- KL_maximo(L_mm, L_mm, L_mm, input$Kx, input$Ky, input$Kz)
-        rp <- calcular_Pd_punto(p$nombre, input$Fy, L_mm, input$Kx, input$Ky, input$Kz)
-        pt_pd[[i]] <- list(
-          nombre=p$nombre, color=p$color, L=KL_max/1000,
-          Pd=rp$Pd, Fcr=rp$Fcr, Fe=rp$Fe,
-          modo=rp$modo, clase=rp$clase, esbeltez=rp$esbeltez,
-          advertencias=rp$advertencias
+  # Modal LaTeX
+  observeEvent(input$btn_latex, {
+    req(datos_grafico())
+    d    <- datos_grafico()
+    L_mm <- input$L_punto * 1000
+    
+    # Capturar latex de cada perfil
+    latex_all <- c()
+    for (pt in d$pt_pd) {
+      if (is.null(pt)) next
+      tryCatch({
+        res <- comp_mod$compresion(
+          perfil_nombre=pt$nombre, Fy=input$Fy,
+          Lx=L_mm, Ly=L_mm, db_manager=db_manager,
+          Kx=input$Kx, Ky=input$Ky, Kz=input$Kz, 
+          mostrar_calculo=FALSE
         )
-
-        rm <- calcular_Md_punto(p$nombre, input$Fy, Lb_mm)
-        pt_md[[i]] <- list(
-          nombre=p$nombre, color=p$color, Lb=Lb_mm/1000,
-          Md=rm$Md, Mn=rm$Mn, Mp=rm$Mp, Lp=rm$Lp, Lr=rm$Lr,
-          modo=rm$modo, advertencias=rm$advertencias
-        )
-
-        if (input$Nu > 0 || input$Mu > 0)
-          ints[[i]] <- calcular_interaccion(
-            p$nombre, input$Fy, L_mm, Lb_mm,
-            input$Nu, input$Mu, input$Kx, input$Ky, input$Kz
+        if (!is.null(res$latex)) {
+          latex_all <- c(latex_all, 
+            paste0("% ========================================"),
+            paste0("% Perfil: ", pt$nombre),
+            paste0("% ========================================"),
+            "",
+            res$latex,
+            "",
+            ""
           )
-      }
-    })
-
-    list(c_pd=c_pd, pt_pd=pt_pd, c_md=c_md, pt_md=pt_md, ints=ints,
-         L_m=input$L_punto, Lb_m=input$Lb_punto)
+        }
+      }, error = function(e) {
+        latex_all <<- c(latex_all, paste("% Error en", pt$nombre, ":", conditionMessage(e)), "")
+      })
+    }
+    
+    if (length(latex_all) == 0) {
+      latex_texto <- "% No hay documentación LaTeX disponible.\n% Verificá que compresion.py esté generando resultados['latex']."
+    } else {
+      latex_texto <- paste(latex_all, collapse="\n")
+    }
+    
+    showModal(modalDialog(
+      title = "Documentación LaTeX — Compresión",
+      size = "l",
+      easyClose = TRUE,
+      footer = tagList(
+        tags$button(
+          type="button", class="btn btn-secondary btn-sm",
+          style="font-family:'IBM Plex Mono',monospace;",
+          onclick="navigator.clipboard.writeText(document.getElementById('latex_output').innerText);",
+          "📋 Copiar"
+        ),
+        modalButton("Cerrar")
+      ),
+      tags$pre(
+        id="latex_output",
+        style="background:#0c0f18;color:#94a3b8;padding:12px;border:1px solid #2a2f3f;
+               border-radius:3px;font-family:'IBM Plex Mono',monospace;font-size:10px;
+               max-height:500px;overflow-y:auto;white-space:pre-wrap;",
+        latex_texto
+      )
+    ))
   })
 
-  plotly_base <- function() {
-    plot_ly() %>% layout(
-      paper_bgcolor="#0c0f18", plot_bgcolor="#0c0f18",
-      font=list(family="IBM Plex Mono", color="#94a3b8"),
-      xaxis=list(color="#64748b", gridcolor="#1e2330", linecolor="#2a2f3f", zerolinecolor="#2a2f3f"),
-      yaxis=list(color="#64748b", gridcolor="#1e2330", linecolor="#2a2f3f", zerolinecolor="#2a2f3f", rangemode="tozero"),
-      legend=list(bgcolor="#171b26", bordercolor="#2a2f3f", borderwidth=1, font=list(size=10)),
-      margin=list(t=20, b=40, l=55, r=20)
-    )
-  }
+  datos_grafico <- eventReactive(input$btn_graficar, {
+    req(input$perf1, input$Fy, input$L_punto, input$Lb_punto)
+    L_mm  <- input$L_punto  * 1000
+    Lb_mm <- input$Lb_punto * 1000
+    Nu    <- input$Nu
+    Mu    <- input$Mu
 
-  plotly_vacia <- function(msg) {
-    plotly_base() %>% layout(
-      annotations=list(list(text=msg, x=0.5, y=0.5, xref="paper", yref="paper",
-        showarrow=FALSE, font=list(color="#475569", size=12, family="IBM Plex Mono")))
+    perfiles <- list(
+      list(nombre=input$perf1, color="#e8523a")
     )
-  }
+    if (isTRUE(input$usar_p2) && nchar(input$perf2) > 0)
+      perfiles[[2]] <- list(nombre=input$perf2, color="#4a9eff")
+    if (isTRUE(input$usar_p3) && nchar(input$perf3) > 0)
+      perfiles[[3]] <- list(nombre=input$perf3, color="#3ecf8e")
+
+    withProgress(message='Graficando curvas...', value=0, {
+      n <- length(perfiles)
+      curvas_Pd <- list()
+      curvas_Md <- list()
+      puntos_Pd <- list()
+      puntos_Md <- list()
+      ints      <- list()
+      for (i in seq_along(perfiles)) {
+        incProgress(1/(n*2), detail=paste("Compresión", perfiles[[i]]$nombre))
+        curvas_Pd[[i]] <- generar_curva_Pd(perfiles[[i]]$nombre, input$Fy, input$Kx, input$Ky, input$Kz)
+        puntos_Pd[[i]] <- calcular_Pd_punto(perfiles[[i]]$nombre, input$Fy, L_mm, input$Kx, input$Ky, input$Kz)
+        puntos_Pd[[i]]$nombre <- perfiles[[i]]$nombre
+        puntos_Pd[[i]]$color  <- perfiles[[i]]$color
+
+        incProgress(1/(n*2), detail=paste("Flexión", perfiles[[i]]$nombre))
+        curvas_Md[[i]] <- generar_curva_Md(perfiles[[i]]$nombre, input$Fy)
+        puntos_Md[[i]] <- calcular_Md_punto(perfiles[[i]]$nombre, input$Fy, Lb_mm)
+        puntos_Md[[i]]$nombre <- perfiles[[i]]$nombre
+        puntos_Md[[i]]$color  <- perfiles[[i]]$color
+
+        if (Nu > 0 || Mu > 0) {
+          ints[[i]] <- calcular_interaccion(perfiles[[i]]$nombre, input$Fy, L_mm, Lb_mm, Nu, Mu,
+                                            input$Kx, input$Ky, input$Kz)
+        } else {
+          ints[[i]] <- NULL
+        }
+      }
+    })
+    list(curvas_pd=curvas_Pd, curvas_md=curvas_Md,
+         pt_pd=puntos_Pd, pt_md=puntos_Md, ints=ints)
+  })
 
   output$plot_Pd <- renderPlotly({
-    if (!isTruthy(datos_grafico()))
-      return(plotly_vacia("Configurar parametros y presionar GRAFICAR"))
-    d   <- datos_grafico()
-    fig <- plotly_base() %>% layout(xaxis=list(title="L [m]", range=c(0,14)), yaxis=list(title="Pd [kN]"))
-    for (cv in d$c_pd) {
-      if (is.null(cv)) next
-      fig <- fig %>% add_trace(
-        data=cv, x=~L_m, y=~Pd, type="scatter", mode="lines",
-        name=unique(cv$perfil), line=list(color=unique(cv$color), width=2),
-        hovertemplate=paste0("<b>",unique(cv$perfil),"</b><br>L = %{x:.2f} m<br>Pd = %{y:.1f} kN<extra></extra>")
-      )
+    req(datos_grafico())
+    d <- datos_grafico()
+    p <- plot_ly()
+    for (i in seq_along(d$curvas_pd)) {
+      c <- d$curvas_pd[[i]]
+      pt <- d$pt_pd[[i]]
+      p <- p %>%
+        add_trace(data=c, x=~L_m, y=~Pd, type='scatter', mode='lines',
+                  line=list(color=pt$color, width=2), name=pt$nombre, showlegend=TRUE) %>%
+        add_trace(x=input$L_punto, y=pt$Pd, type='scatter', mode='markers',
+                  marker=list(color=pt$color, size=8, symbol='circle'),
+                  name=paste0(pt$nombre," @ L=",input$L_punto,"m"), showlegend=FALSE)
     }
-    for (pt in d$pt_pd) {
-      if (is.null(pt) || is.na(pt$Pd)) next
-      fig <- fig %>% add_trace(
-        x=pt$L, y=pt$Pd, type="scatter", mode="markers",
-        name=paste0(pt$nombre," (L adoptada)"),
-        marker=list(color=pt$color, size=10, line=list(color="white",width=1.5)),
-        hovertemplate=paste0("<b>",pt$nombre,"</b><br>",
-          "L = ",round(pt$L,2)," m<br>Pd = ",round(pt$Pd,1)," kN<br>",
-          "Fcr = ",round(pt$Fcr,1)," MPa<br>Modo: ",pt$modo,"<br>KL/r = ",round(pt$esbeltez,1),"<extra></extra>"),
-        showlegend=TRUE
-      )
-    }
-    fig %>% add_segments(
-      x=d$L_m, xend=d$L_m, y=0, yend=1, yref="paper",
-      line=list(color="rgba(255,255,255,0.15)", dash="dot", width=1),
-      showlegend=FALSE, hoverinfo="none"
-    )
+    p %>%
+      layout(
+        xaxis=list(title="L [m]", gridcolor='#2a2f3f', zerolinecolor='#2a2f3f'),
+        yaxis=list(title="Pd [kN]", gridcolor='#2a2f3f', zerolinecolor='#2a2f3f'),
+        paper_bgcolor='#171b26', plot_bgcolor='#0f1117',
+        font=list(family='IBM Plex Mono', size=10, color='#94a3b8'),
+        legend=list(orientation='h', x=0, y=1.1, font=list(size=9))
+      ) %>%
+      config(displayModeBar=FALSE)
   })
 
   output$plot_Md <- renderPlotly({
-    if (!isTruthy(datos_grafico()))
-      return(plotly_vacia("Configurar parametros y presionar GRAFICAR"))
-    d   <- datos_grafico()
-    fig <- plotly_base() %>% layout(xaxis=list(title="Lb [m]", range=c(0,14)), yaxis=list(title="Md [kN·m]"))
-    for (cv in d$c_md) {
-      if (is.null(cv)) next
-      fig <- fig %>% add_trace(
-        data=cv, x=~Lb_m, y=~Md, type="scatter", mode="lines",
-        name=unique(cv$perfil), line=list(color=unique(cv$color), width=2),
-        hovertemplate=paste0("<b>",unique(cv$perfil),"</b><br>Lb = %{x:.2f} m<br>Md = %{y:.1f} kN·m<extra></extra>")
-      )
+    req(datos_grafico())
+    d <- datos_grafico()
+    p <- plot_ly()
+    for (i in seq_along(d$curvas_md)) {
+      c <- d$curvas_md[[i]]
+      pt <- d$pt_md[[i]]
+      p <- p %>%
+        add_trace(data=c, x=~Lb_m, y=~Md, type='scatter', mode='lines',
+                  line=list(color=pt$color, width=2), name=pt$nombre, showlegend=TRUE) %>%
+        add_trace(x=input$Lb_punto, y=pt$Md, type='scatter', mode='markers',
+                  marker=list(color=pt$color, size=8, symbol='circle'),
+                  name=paste0(pt$nombre," @ Lb=",input$Lb_punto,"m"), showlegend=FALSE)
     }
-    for (pt in d$pt_md) {
-      if (is.null(pt) || is.na(pt$Md)) next
-      lp_m <- if (!is.null(pt$Lp) && !is.na(pt$Lp) && !is.nan(as.numeric(pt$Lp))) round(as.numeric(pt$Lp)/1000, 2) else "-"
-      lr_m <- if (!is.null(pt$Lr) && !is.na(pt$Lr) && !is.nan(as.numeric(pt$Lr))) round(as.numeric(pt$Lr)/1000, 2) else "-"
-      fig <- fig %>% add_trace(
-        x=pt$Lb, y=pt$Md, type="scatter", mode="markers",
-        name=paste0(pt$nombre," (Lb adoptado)"),
-        marker=list(color=pt$color, size=10, symbol="diamond", line=list(color="white",width=1.5)),
-        hovertemplate=paste0("<b>",pt$nombre,"</b><br>",
-          "Lb = ",round(pt$Lb,2)," m<br>Md = ",round(pt$Md,1)," kN·m<br>",
-          "Mp = ",round(pt$Mp,1)," kN·m<br>Lp = ",lp_m," m | Lr = ",lr_m," m<br>",
-          "Modo: ",pt$modo,"<extra></extra>"),
-        showlegend=TRUE
-      )
-    }
-    fig %>% add_segments(
-      x=d$Lb_m, xend=d$Lb_m, y=0, yend=1, yref="paper",
-      line=list(color="rgba(74,158,255,0.2)", dash="dot", width=1),
-      showlegend=FALSE, hoverinfo="none"
-    )
+    p %>%
+      layout(
+        xaxis=list(title="Lb [m]", gridcolor='#2a2f3f', zerolinecolor='#2a2f3f'),
+        yaxis=list(title="Md [kN·m]", gridcolor='#2a2f3f', zerolinecolor='#2a2f3f'),
+        paper_bgcolor='#171b26', plot_bgcolor='#0f1117',
+        font=list(family='IBM Plex Mono', size=10, color='#94a3b8'),
+        legend=list(orientation='h', x=0, y=1.1, font=list(size=9))
+      ) %>%
+      config(displayModeBar=FALSE)
   })
 
   output$resultado_Pd <- renderUI({
@@ -734,8 +776,7 @@ server <- function(input, output, session) {
           column(6,
             tags$b(style=paste0("color:",pt$color,";font-family:'IBM Plex Mono',monospace;font-size:11px;"), pt$nombre),
             tags$br(),
-            tags$span(style="color:#64748b;font-size:10px;",
-              paste0("Clase: ",pt$clase," | Modo: ",pt$modo," | KL/r = ",round(pt$esbeltez,1)))
+            tags$span(style="color:#64748b;font-size:10px;", paste0("Modo: ",pt$modo," | Clase: ",pt$clase))
           ),
           column(3,
             div(style="color:#64748b;font-size:10px;", "Fcr"),

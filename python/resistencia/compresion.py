@@ -10,8 +10,9 @@ Estado de implementación:
     ✅ Paso 4 : Inicializar resultados
     ✅ Paso 5 : Asignar variables de trabajo
     ✅ Paso 6 : Clasificación de sección (λ vs λp/λr)
-    ✅ Paso 7 : Pandeo global (Fe, Fcr)
-    ✅ Paso 8 : Resistencia nominal y de diseño (Pn, Pd)
+    ✅ Paso 7 : Cálculo de factor Q para secciones esbeltas (AISC E7)
+    ✅ Paso 8 : Pandeo global (Fe, Fcr con Q)
+    ✅ Paso 9 : Resistencia nominal y de diseño (Pn, Pd)
 
 Requiere:
     core/gestor_base_datos.py
@@ -31,7 +32,7 @@ if _raiz_python not in sys.path:
     sys.path.insert(0, _raiz_python)
 
 from core.utilidades_perfil import extraer_propiedades, verificar_propiedades
-from clasificacion.clasificacion_seccion import clasificar_seccion
+from clasificacion.clasificacion_seccion import clasificar_seccion, calcular_Q
 
 
 # ============================================================================
@@ -96,9 +97,12 @@ def compresion(perfil_nombre: str,
                Kx: float = 1.0,
                Ky: float = 1.0,
                Kz: float = 1.0,
+               max_iter_Q: int = 5,
+               tol_Q: float = 0.01,
                mostrar_calculo: bool = True) -> dict:
     """
     Calcular resistencia a compresión axial según CIRSOC 301 / AISC 360-10.
+    Incluye cálculo iterativo del factor Q para secciones esbeltas (AISC E7).
 
     Parámetros:
     -----------
@@ -109,21 +113,35 @@ def compresion(perfil_nombre: str,
     db_manager     : GestorBaseDatos — Instancia con la BD activa (CIRSOC o AISC)
     Lz             : float, opcional — Longitud pandeo torsional [mm]
                                        (default: max(Lx, Ly))
-    Kx, Ky, Kz    : float           — Factores de longitud efectiva (default: 1.0)
+    Kx, Ky, Kz     : float           — Factores de longitud efectiva (default: 1.0)
+    max_iter_Q     : int             — Máx. iteraciones para convergencia de Q (default: 5)
+    tol_Q          : float           — Tolerancia relativa para Q (default: 0.01 = 1%)
     mostrar_calculo: bool            — Imprimir reporte en consola (default: True)
 
     Returns:
     --------
     dict — claves principales:
-        'Pn'           [kN]   resistencia nominal
-        'Pd'           [kN]   resistencia de diseño (φc·Pn)
-        'Fcr'          [MPa]  tensión crítica
-        'Fe'           [MPa]  tensión crítica elástica
-        'modo_pandeo'  [str]  modo que gobierna
-        'clase_seccion'[str]  COMPACTA | NO_COMPACTA | ESBELTA
-        'esbeltez_max' [—]    máxima esbeltez KL/r
-        'advertencias' [list]
+        'Pn'            [kN]   resistencia nominal
+        'Pd'            [kN]   resistencia de diseño (φc·Pn)
+        'Fcr'           [MPa]  tensión crítica
+        'Fe'            [MPa]  tensión crítica elástica
+        'Q'             [—]    factor de reducción por elementos esbeltos
+        'Qs'            [—]    factor para elementos no rigidizados
+        'Qa'            [—]    factor para elementos rigidizados
+        'iter_Q'        [int]  número de iteraciones realizadas para Q
+        'modo_pandeo'   [str]  modo que gobierna
+        'clase_seccion' [str]  COMPACTA | NO_COMPACTA | ESBELTA
+        'esbeltez_max'  [—]    máxima esbeltez KL/r
+        'advertencias'  [list]
     """
+
+    # ================================================================== #
+    # PASO 0: Inicio de LaTeX                                   #
+    # ================================================================== #
+
+    latex_doc = []
+    latex_doc.append(f"\\section{{Cálculo de Compresión: {perfil_nombre}}}")
+    
 
     # ================================================================== #
     # PASO 1: OBTENER DATOS DEL PERFIL                                   #
@@ -132,6 +150,7 @@ def compresion(perfil_nombre: str,
     perfil    = db_manager.obtener_datos_perfil(perfil_nombre)
     bd_nombre = db_manager.nombre_base_activa()
     tipo      = str(perfil['Tipo']).strip()
+    latex_doc.append(f"\\text{{Base de datos: {bd_nombre}}}")
 
     # ================================================================== #
     # PASO 2: EXTRAER PROPIEDADES (todo en mm / mm² / mm⁴)               #
@@ -168,6 +187,9 @@ def compresion(perfil_nombre: str,
         'G'           : G_ACERO,
         'phi_c'       : PHI_C,
         'Q'           : 1.0,
+        'Qs'          : 1.0,
+        'Qa'          : 1.0,
+        'iter_Q'      : 0,
         'Lx'          : Lx,
         'Ly'          : Ly,
         'Lz'          : Lz,
@@ -199,6 +221,10 @@ def compresion(perfil_nombre: str,
         'xo': xo, 'yo': yo, 'ro': ro,
     })
 
+    latex_doc.append(f"A = {A/100:.2f} \\, \\text{{cm}}^2")
+    latex_doc.append(f"r_x = {rx/10:.2f} \\, \\text{{cm}}, \\quad r_y = {ry/10:.2f} \\, \\text{{cm}}")
+    latex_doc.append(f"r_o = {ro/10:.2f} \\, \\text{{cm}}")
+
     # ================================================================== #
     # PASO 6: CLASIFICACIÓN DE SECCIÓN                                   #
     # ================================================================== #
@@ -208,9 +234,96 @@ def compresion(perfil_nombre: str,
     resultados['clase_seccion']  = clasificacion['clase_seccion']
     resultados['advertencias'].extend(clasificacion['advertencias'])
 
+    # ================================================================== #
+    # PASO 6.5: CÁLCULO DE FACTOR Q (solo si es ESBELTA)                #
+    # ================================================================== #
+
     if clasificacion['es_esbelta']:
+        latex_doc.append("\\subsection{Cálculo de Factor Q (Sección Esbelta)}")
+        
+        # Necesitamos calcular Fe primero para iniciar iteración
+        # Calculamos Fe preliminar (se hará formalmente en PASO 7)
+        KxLx = Kx * Lx
+        KyLy = Ky * Ly
+        
+        if familia == 'DOBLE_T':
+            Fe_x_temp, _ = _fe_flexional(KxLx, rx)
+            Fe_y_temp, _ = _fe_flexional(KyLy, ry)
+            Fe_z_temp = _fe_torsional(J, Cw, Kz, Lz, A, ro)
+            Fe_temp = min(Fe_x_temp, Fe_y_temp, Fe_z_temp)
+        elif familia == 'CANAL':
+            Fe_x_temp, _ = _fe_flexional(KxLx, rx)
+            Fe_y_temp, _ = _fe_flexional(KyLy, ry)
+            Fe_z_temp = _fe_torsional(J, Cw, Kz, Lz, A, ro)
+            if H is not None and H > 0 and xo > 0:
+                Fe_yzt_temp = _fe_flexotorsional_canal(Fe_y_temp, Fe_z_temp, H)
+            else:
+                Fe_yzt_temp = Fe_y_temp
+            Fe_temp = min(Fe_x_temp, Fe_yzt_temp)
+        elif familia == 'ANGULAR':
+            iv = props['flexion']['iv']
+            KL_angular = max(KxLx, KyLy, Kz * Lz)
+            Fe_temp, _ = _fe_flexional(KL_angular, iv)
+        else:
+            Fe_temp = 1000  # Valor por defecto si no reconoce familia
+        
+        # Iteración para calcular Q
+        Q_actual = 1.0
+        iter_Q = 0
+        
+        for iter_Q in range(1, max_iter_Q + 1):
+            # Calcular Fcr con Q actual
+            Fcr_temporal = _calcular_Fcr(Fe_temp, Fy, Q=Q_actual)
+            
+            # Calcular nuevo Q usando Fcr temporal
+            Q_info = calcular_Q(props, Fy, E_ACERO, Fcr=Fcr_temporal)
+            Q_nuevo = Q_info['Q']
+            Qs = Q_info['Qs']
+            Qa = Q_info['Qa']
+            
+            # Verificar convergencia
+            error_relativo = abs(Q_nuevo - Q_actual) / Q_actual if Q_actual > 0 else 1.0
+            
+            latex_doc.append(
+                f"\\text{{Iter. {iter_Q}: }} Q = {Q_nuevo:.4f} "
+                f"(Q_s = {Qs:.4f}, Q_a = {Qa:.4f}), "
+                f"F_{{cr}} = {Fcr_temporal:.2f} \\, \\text{{MPa}}, "
+                f"\\epsilon = {error_relativo*100:.2f}\\%"
+            )
+            
+            if error_relativo < tol_Q:
+                break
+            
+            Q_actual = Q_nuevo
+        
+        # Advertencia sobre convergencia
+        if error_relativo < tol_Q:
+            resultados['advertencias'].append(
+                f"Factor Q convergió en {iter_Q} iteraciones: Q = {Q_nuevo:.4f} "
+                f"(Qs = {Qs:.4f}, Qa = {Qa:.4f})"
+            )
+        else:
+            resultados['advertencias'].append(
+                f"ADVERTENCIA: Factor Q no convergió en {max_iter_Q} iteraciones. "
+                f"Último valor: Q = {Q_nuevo:.4f}"
+            )
+        
+        # Actualizar resultados con Q final
+        resultados['Q'] = Q_nuevo
+        resultados['Qs'] = Qs
+        resultados['Qa'] = Qa
+        resultados['iter_Q'] = iter_Q
+        resultados['Q_notas'] = Q_info['notas']
+        
+        latex_doc.append(
+            f"Q_{{\\text{{final}}}} = Q_s \\times Q_a = "
+            f"{Qs:.4f} \\times {Qa:.4f} = {Q_nuevo:.4f}"
+        )
+        
+    else:
+        latex_doc.append("\\text{Sección COMPACTA/NO\\_COMPACTA: } Q = 1.0")
         resultados['advertencias'].append(
-            "Sección ESBELTA: Ae no implementado, se usa Ag (resultado no conservador)."
+            f"Sección {clasificacion['clase_seccion']}: Q = 1.0 (sin reducción)"
         )
 
     # ================================================================== #
@@ -241,9 +354,18 @@ def compresion(perfil_nombre: str,
             'Flexional_Y': Fe_y,
             'Torsional_Z': Fe_z,
         }
+        latex_doc.append(f"\\lambda_x = \\frac{{K_x L_x}}{{r_x}} = \\frac{{{Kx} \\times {Lx}}}{{{rx:.2f}}} = {esbeltez_x:.2f}")
+        latex_doc.append(f"F_{{e,x}} = \\frac{{\\pi^2 E}}{{\\lambda_x^2}} = \\frac{{\\pi^2 \\times {E_ACERO}}}{{{esbeltez_x:.2f}^2}} = {Fe_x:.2f} \\, \\text{{MPa}}")
+        
+        latex_doc.append(f"\\lambda_y = {esbeltez_y:.2f}")
+        latex_doc.append(f"F_{{e,y}} = {Fe_y:.2f} \\, \\text{{MPa}}")
+        
+        latex_doc.append(f"F_{{e,z}} = \\frac{{\\pi^2 E C_w}}{{(K_z L_z)^2}} + \\frac{{G J}}{{A_g r_o^2}} = {Fe_z:.2f} \\, \\text{{MPa}}")
+
         Fe           = min(modos_Fe.values())
         modo_governa = min(modos_Fe, key=modos_Fe.get)
         esbeltez_max = max(esbeltez_x, esbeltez_y)
+        latex_doc.append(f"F_e = \\min(F_{{e,x}}, F_{{e,y}}, F_{{e,z}}) = {Fe:.2f} \\, \\text{{MPa}} \\quad (\\text{{{modo_governa}}})")
 
     # ------------------------------------------------------------------ #
     # CANAL                                                               #
@@ -327,9 +449,20 @@ def compresion(perfil_nombre: str,
         'Pd' : round(Pd / 1000, 2),   # kN
     })
 
+    ratio = resultados['Q'] * Fy / Fe
+    if ratio <= 2.25:
+        latex_doc.append(f"\\frac{{Q F_y}}{{F_e}} = {ratio:.3f} \\leq 2.25 \\rightarrow F_{{cr}} = 0.658^{{{ratio:.3f}}} \\times {Fy} = {Fcr:.2f} \\, \\text{{MPa}}")
+    else:
+        latex_doc.append(f"\\frac{{Q F_y}}{{F_e}} = {ratio:.3f} > 2.25 \\rightarrow F_{{cr}} = 0.877 \\times F_e = {Fcr:.2f} \\, \\text{{MPa}}")
+    
+    latex_doc.append(f"P_n = F_{{cr}} \\times A_g = {Fcr:.2f} \\times {A/100:.2f} = {Pn/1000:.2f} \\, \\text{{kN}}")
+    latex_doc.append(f"P_d = \\phi_c P_n = {PHI_C} \\times {Pn/1000:.2f} = {Pd/1000:.2f} \\, \\text{{kN}}")
+
     if mostrar_calculo:
         _imprimir_reporte(resultados)
 
+    #Sumo la columna de latex
+    resultados['latex'] = '\n\n'.join(latex_doc)
     return resultados
 
 
@@ -350,7 +483,13 @@ def _imprimir_reporte(r: dict):
     print("=" * 62)
     print(f"  Perfil     : {r['perfil']}   ({r['tipo']} — {r['familia']})")
     print(f"  Base datos : {r['base_datos']}")
-    print(f"  Fy = {r['Fy']} MPa    E = {r['E']} MPa    Q = {r['Q']}")
+    print(f"  Fy = {r['Fy']} MPa    E = {r['E']} MPa")
+    
+    # Mostrar Q solo si es diferente de 1.0
+    if r['Q'] < 1.0:
+        print(f"  Q = {r['Q']:.4f}  (Qs = {r['Qs']:.4f}, Qa = {r['Qa']:.4f})  "
+              f"← {r['iter_Q']} iter.")
+    
     print(f"  Lx = {r['Lx']:.0f} mm   Ly = {r['Ly']:.0f} mm   Lz = {r['Lz']:.0f} mm")
     print(f"  Kx = {r['Kx']}   Ky = {r['Ky']}   Kz = {r['Kz']}")
     print("-" * 62)
@@ -396,6 +535,7 @@ if __name__ == '__main__':
 
     print("\n--- Doble T ---")
     r1 = compresion('18x97', Fy=250, Lx=5000, Ly=5000, db_manager=db)
+    print(r1['latex'])
 
     print("\n--- Canal ---")
     r2 = compresion('C15x50', Fy=250, Lx=3000, Ly=3000, db_manager=db)
