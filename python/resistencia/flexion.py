@@ -96,6 +96,7 @@ def flexion(perfil_nombre: str,
             Fy: float,
             Lb: float,
             db_manager,
+            tipo_perfil: str = None,
             Cb: float = 1.0,
             mostrar_calculo: bool = True) -> dict:
     """
@@ -103,10 +104,12 @@ def flexion(perfil_nombre: str,
 
     Parámetros:
     -----------
-    perfil_nombre   : str   — designación del perfil
+    perfil_nombre   : str   — designación del perfil (ej: 'W310x97', '100')
     Fy              : float — tensión de fluencia [MPa]
     Lb              : float — longitud sin arriostrar lateral [mm]
     db_manager      : GestorBaseDatos
+    tipo_perfil     : str, opcional — tipo para búsqueda exacta (ej: 'IPE', 'IPN')
+                                      Requerido si perfil_nombre es ambiguo
     Cb              : float — modificador de diagrama de momento (default 1.0)
     mostrar_calculo : bool
 
@@ -121,7 +124,7 @@ def flexion(perfil_nombre: str,
     """
 
     # ── 1. Datos ─────────────────────────────────────────────────────────────
-    perfil    = db_manager.obtener_datos_perfil(perfil_nombre)
+    perfil    = db_manager.obtener_datos_perfil(perfil_nombre, tipo=tipo_perfil)
     bd_nombre = db_manager.nombre_base_activa()
     tipo      = str(perfil['Tipo']).strip()
 

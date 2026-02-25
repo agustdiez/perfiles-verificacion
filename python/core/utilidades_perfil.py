@@ -41,9 +41,13 @@ import pandas as pd
 # ============================================================================
 
 FAMILIAS = {
-    'DOBLE_T' : ['W', 'M', 'HP', 'S', 'IPE', 'IPN', 'IPB', 'IPBl', 'IPBv'],
-    'CANAL'   : ['C', 'MC', 'UPN'],
-    'ANGULAR' : ['L'],
+    'DOBLE_T'     : ['W', 'M', 'HP', 'S', 'IPE', 'IPN', 'IPB', 'IPBl', 'IPBv'],
+    'CANAL'       : ['C', 'MC', 'UPN'],
+    'ANGULAR'     : ['L'],
+    'PERFIL_T'    : ['T', 'WT', 'MT', 'ST'],
+    'TUBO_CIRC'   : ['TUBO CIRC.', 'PIPE'],
+    'TUBO_CUAD'   : ['TUBO CUAD.', 'HSS'],  # HSS puede ser cuadrado o rectangular
+    'TUBO_RECT'   : ['TUBO RECT.', 'HSS'],  # Se determina por bf: si bf > 0 → rect, sino cuad
 }
 
 
@@ -60,11 +64,38 @@ def a_flotante(valor, default: float = 0.0) -> float:
         return default
 
 
-def determinar_familia(tipo: str) -> str:
-    """Retorna 'DOBLE_T' | 'CANAL' | 'ANGULAR' | 'DESCONOCIDA'."""
+def determinar_familia(tipo: str, perfil: pd.Series = None) -> str:
+    """
+    Retorna 'DOBLE_T' | 'CANAL' | 'ANGULAR' | 'PERFIL_T' | 
+           'TUBO_CIRC' | 'TUBO_CUAD' | 'TUBO_RECT' | 'DESCONOCIDA'.
+    
+    Para HSS (AISC), determina si es cuadrado o rectangular según dimensiones.
+    """
+    # HSS necesita lógica especial
+    if tipo == 'HSS' and perfil is not None:
+        # Intentar determinar si es cuadrado o rectangular
+        # HSS tiene columna 'B' para ancho en AISC
+        try:
+            b_val = perfil.get('B', 0)
+            # Si no hay B o B=0, asumir que es de la otra familia (no importa cuál)
+            # Si hay B, verificar si es cuadrado (d ≈ B) o rectangular (d != B)
+            if b_val and b_val > 0:
+                d_val = perfil.get('d', 0)
+                # Tolerancia del 5% para considerar cuadrado
+                if abs(d_val - b_val) / max(d_val, b_val, 1) < 0.05:
+                    return 'TUBO_CUAD'
+                else:
+                    return 'TUBO_RECT'
+        except:
+            pass
+        # Default: probar con TUBO_CUAD primero
+        return 'TUBO_CUAD'
+    
+    # Otros tipos: búsqueda normal
     for familia, tipos in FAMILIAS.items():
         if tipo in tipos:
             return familia
+    
     return 'DESCONOCIDA'
 
 
@@ -156,6 +187,86 @@ _MAPA_ANGULAR = {
     },
 }
 
+_MAPA_PERFIL_T = {
+    'CIRSOC': {
+        'd'     : ('d',      1.0),
+        'bf'    : ('bf',     1.0),
+        'tf'    : ('tf',     1.0),
+        'area'  : ('Ag',   100.0),
+        'peso'  : ('Peso',   1.0),
+        'Ix'    : ('Ix',    1e4),
+        'Sx'    : ('Sx',    1e3),
+        'rx'    : ('rx',    10.0),
+        'Zx'    : ('Zx',    1e3),
+        'Iy'    : ('Iy',    1e4),
+        'Sy'    : ('Sy',    1e3),
+        'ry'    : ('ry',    10.0),
+        'Zy'    : ('Zy',    1e3),
+        'J'     : ('J',     1e4),
+        'Cw'    : ('Cw',    1e6),
+        'bf_2tf': ('bf/2tf', 1.0),
+        'd_tw'  : ('d/tw',   1.0),
+    },
+    'AISC': {
+        'd'     : ('d',      1.0),
+        'bf'    : ('bf',     1.0),
+        'tf'    : ('tf',     1.0),
+        'tw'    : ('tw',     1.0),
+        'area'  : ('A',      1.0),
+        'peso'  : ('W',      1.0),
+        'Ix'    : ('Ix',    1e6),
+        'Sx'    : ('Sx',    1e3),
+        'rx'    : ('rx',     1.0),
+        'Zx'    : ('Zx',    1e3),
+        'Iy'    : ('Iy',    1e6),
+        'Sy'    : ('Sy',    1e3),
+        'ry'    : ('ry',     1.0),
+        'Zy'    : ('Zy',    1e3),
+        'J'     : ('J',     1e3),
+        'Cw'    : ('Cw',    1e9),
+        'bf_2tf': ('bf/2tf', 1.0),
+        'd_tw'  : ('d/tw',   1.0),
+    },
+}
+
+_MAPA_TUBO = {
+    'CIRSOC': {
+        'd'     : ('d',      1.0),  # diámetro o altura
+        'bf'    : ('bf',     1.0),  # ancho (solo rect.)
+        't'     : ('tf',     1.0),  # espesor
+        'area'  : ('Ag',   100.0),
+        'peso'  : ('Peso',   1.0),
+        'Ix'    : ('Ix',    1e4),
+        'Sx'    : ('Sx',    1e3),
+        'rx'    : ('rx',    10.0),
+        'Zx'    : ('Zx',    1e3),
+        'Iy'    : ('Iy',    1e4),
+        'Sy'    : ('Sy',    1e3),
+        'ry'    : ('ry',    10.0),
+        'Zy'    : ('Zy',    1e3),
+        'J'     : ('J',     1e4),
+        'Cw'    : ('Cw',    1e6),
+    },
+    'AISC': {
+        # Intentar múltiples columnas para d, bf, t (diferentes entre PIPE y HSS)
+        'd'     : [('Ht', 1.0), ('OD', 1.0)],  # HSS: Ht, PIPE: OD
+        'bf'    : [('B', 1.0)],                 # HSS: B
+        't'     : [('tdes', 1.0), ('t', 1.0)], # HSS: tdes, PIPE: t
+        'area'  : ('A',      1.0),
+        'peso'  : ('W',      1.0),
+        'Ix'    : ('Ix',    1e6),
+        'Sx'    : ('Sx',    1e3),
+        'rx'    : ('rx',     1.0),
+        'Zx'    : ('Zx',    1e3),
+        'Iy'    : ('Iy',    1e6),
+        'Sy'    : ('Sy',    1e3),
+        'ry'    : ('ry',     1.0),
+        'Zy'    : ('Zy',    1e3),
+        'J'     : ('J',     1e3),
+        'Cw'    : None,              # No disponible en AISC tubos
+    },
+}
+
 
 def _leer(perfil: pd.Series, clave: str, bd: str,
           mapa: dict = None, default: float = 0.0) -> float:
@@ -163,12 +274,25 @@ def _leer(perfil: pd.Series, clave: str, bd: str,
     Leer y convertir una propiedad del perfil usando el mapa indicado.
 
     Devuelve `default` si la entrada del mapa es None o la columna no existe.
+    
+    Soporta múltiples columnas alternativas: si entrada es una lista,
+    intenta cada columna en orden hasta encontrar una con valor válido.
     """
     if mapa is None:
         mapa = _MAPA_BASE
     entrada = mapa[bd].get(clave)
     if entrada is None:
         return default
+    
+    # Soportar lista de alternativas: [(col1, factor1), (col2, factor2), ...]
+    if isinstance(entrada, list):
+        for col, factor in entrada:
+            valor = a_flotante(perfil.get(col, None), None)
+            if valor is not None:  # Encontró valor válido
+                return valor * factor
+        return default  # Ninguna alternativa tuvo valor
+    
+    # Entrada simple: (col, factor)
     col, factor = entrada
     return a_flotante(perfil.get(col, default), default) * factor
 
@@ -202,7 +326,7 @@ def extraer_propiedades(perfil: pd.Series, base_datos: str = 'CIRSOC') -> dict:
 
     props = {
         'tipo'        : tipo,
-        'familia'     : determinar_familia(tipo),
+        'familia'     : determinar_familia(tipo, perfil),
         'basicas'     : {},
         'flexion'     : {},
         'torsion'     : {},
@@ -211,6 +335,9 @@ def extraer_propiedades(perfil: pd.Series, base_datos: str = 'CIRSOC') -> dict:
         'disponibles' : [],
     }
 
+    # Determinar familia una vez
+    familia = props['familia']
+    
     # Atajos para no repetir bd en cada llamada
     R = lambda clave, default=0.0: _leer(perfil, clave, bd, default=default)
     L = lambda clave, default=0.0: _leer(perfil, clave, bd,
@@ -219,7 +346,7 @@ def extraer_propiedades(perfil: pd.Series, base_datos: str = 'CIRSOC') -> dict:
     # ------------------------------------------------------------------ #
     # DOBLE T: W, M, HP, S, IPE, IPN, IPB, IPBl, IPBv                    #
     # ------------------------------------------------------------------ #
-    if tipo in FAMILIAS['DOBLE_T']:
+    if familia == 'DOBLE_T':
 
         props['basicas'] = {
             'd'   : R('d'),
@@ -263,7 +390,7 @@ def extraer_propiedades(perfil: pd.Series, base_datos: str = 'CIRSOC') -> dict:
     # ------------------------------------------------------------------ #
     # CANAL: C, MC, UPN                                                   #
     # ------------------------------------------------------------------ #
-    elif tipo in FAMILIAS['CANAL']:
+    elif familia == 'CANAL':
 
         props['basicas'] = {
             'd'   : R('d'),
@@ -338,7 +465,7 @@ def extraer_propiedades(perfil: pd.Series, base_datos: str = 'CIRSOC') -> dict:
     # ------------------------------------------------------------------ #
     # ANGULAR: L                                                          #
     # ------------------------------------------------------------------ #
-    elif tipo in FAMILIAS['ANGULAR']:
+    elif familia == 'ANGULAR':
 
         b  = L('b')
         t  = L('t')
@@ -389,6 +516,193 @@ def extraer_propiedades(perfil: pd.Series, base_datos: str = 'CIRSOC') -> dict:
             'b', 't', 'Ag', 'Ix', 'rx', 'Iv', 'iv', 'Iz', 'J', 'Cw',
         ]
 
+    # ------------------------------------------------------------------ #
+    # PERFIL T: T, WT, MT, ST                                             #
+    # ------------------------------------------------------------------ #
+    elif familia == 'PERFIL_T':
+        
+        # Atajo para perfiles T
+        T = lambda clave, default=0.0: _leer(perfil, clave, bd,
+                                              mapa=_MAPA_PERFIL_T, default=default)
+        
+        props['basicas'] = {
+            'd'   : T('d'),
+            'bf'  : T('bf'),
+            'Ag'  : T('area'),
+            'Peso': T('peso'),
+        }
+        
+        props['flexion'] = {
+            'Ix': T('Ix'), 'Sx': T('Sx'), 'rx': T('rx'), 'Zx': T('Zx'),
+            'Iy': T('Iy'), 'Sy': T('Sy'), 'ry': T('ry'), 'Zy': T('Zy'),
+        }
+        
+        props['torsion'] = {'J': T('J'), 'Cw': T('Cw')}
+        
+        props['seccion'] = {
+            'tf'    : T('tf'),
+            'tw'    : T('tw') if bd == 'AISC' else 0.0,
+            'bf_2tf': T('bf_2tf'),
+            'd_tw'  : T('d_tw'),
+        }
+        
+        # Centro de corte: perfiles T tienen excentricidad
+        props['centro_corte'] = {
+            'xo': 0.0,
+            'yo': 0.0,
+            'ro': 0.0,
+            'H' : None,
+        }
+        
+        props['disponibles'] = [
+            'd', 'bf', 'tf', 'Ag', 'Ix', 'Iy', 'Sx', 'Sy', 
+            'rx', 'ry', 'Zx', 'Zy', 'J', 'Cw',
+        ]
+
+    # ------------------------------------------------------------------ #
+    # TUBOS CIRCULARES: TUBO CIRC., PIPE                                 #
+    # ------------------------------------------------------------------ #
+    elif familia == 'TUBO_CIRC':
+        
+        # Atajo para tubos
+        Tb = lambda clave, default=0.0: _leer(perfil, clave, bd,
+                                               mapa=_MAPA_TUBO, default=default)
+        
+        d  = Tb('d')     # diámetro exterior
+        t  = Tb('t')     # espesor
+        Ag = Tb('area')
+        
+        # Tubos circulares: Ix = Iy
+        Ix = Tb('Ix')
+        Sx = Tb('Sx')
+        rx = Tb('rx')
+        
+        props['basicas'] = {
+            'd'   : d,
+            't'   : t,
+            'Ag'  : Ag,
+            'Peso': Tb('peso'),
+        }
+        
+        props['flexion'] = {
+            'Ix': Ix, 'Sx': Sx, 'rx': rx, 'Zx': Tb('Zx'),
+            'Iy': Ix, 'Sy': Sx, 'ry': rx, 'Zy': Tb('Zx'),  # simétrico
+        }
+        
+        props['torsion'] = {'J': Tb('J'), 'Cw': Tb('Cw')}
+        
+        props['seccion'] = {
+            'd'  : d,
+            't'  : t,
+            'd_t': d / t if t > 0 else 0.0,
+        }
+        
+        props['centro_corte'] = {
+            'xo': 0.0,  # centroide = centro de corte
+            'yo': 0.0,
+            'ro': rx,   # para sección circular ro ≈ rx
+            'H' : 1.0,  # sección doblemente simétrica
+        }
+        
+        props['disponibles'] = [
+            'd', 't', 'Ag', 'Ix', 'rx', 'J', 'Cw',
+        ]
+
+    # ------------------------------------------------------------------ #
+    # TUBOS CUADRADOS: TUBO CUAD.                                        #
+    # ------------------------------------------------------------------ #
+    elif familia == 'TUBO_CUAD':
+        
+        Tb = lambda clave, default=0.0: _leer(perfil, clave, bd,
+                                               mapa=_MAPA_TUBO, default=default)
+        
+        d  = Tb('d')     # lado del cuadrado
+        t  = Tb('t')     # espesor
+        Ag = Tb('area')
+        
+        # Tubos cuadrados: Ix = Iy
+        Ix = Tb('Ix')
+        Sx = Tb('Sx')
+        rx = Tb('rx')
+        
+        props['basicas'] = {
+            'd'   : d,
+            't'   : t,
+            'Ag'  : Ag,
+            'Peso': Tb('peso'),
+        }
+        
+        props['flexion'] = {
+            'Ix': Ix, 'Sx': Sx, 'rx': rx, 'Zx': Tb('Zx'),
+            'Iy': Ix, 'Sy': Sx, 'ry': rx, 'Zy': Tb('Zx'),  # simétrico
+        }
+        
+        props['torsion'] = {'J': Tb('J'), 'Cw': Tb('Cw')}
+        
+        props['seccion'] = {
+            'd'  : d,
+            't'  : t,
+            'd_t': d / t if t > 0 else 0.0,
+        }
+        
+        props['centro_corte'] = {
+            'xo': 0.0,
+            'yo': 0.0,
+            'ro': rx,
+            'H' : 1.0,
+        }
+        
+        props['disponibles'] = [
+            'd', 't', 'Ag', 'Ix', 'rx', 'J', 'Cw',
+        ]
+
+    # ------------------------------------------------------------------ #
+    # TUBOS RECTANGULARES: TUBO RECT.                                    #
+    # ------------------------------------------------------------------ #
+    elif familia == 'TUBO_RECT':
+        
+        Tb = lambda clave, default=0.0: _leer(perfil, clave, bd,
+                                               mapa=_MAPA_TUBO, default=default)
+        
+        d  = Tb('d')     # altura
+        bf = Tb('bf')    # ancho
+        t  = Tb('t')     # espesor
+        Ag = Tb('area')
+        
+        props['basicas'] = {
+            'd'   : d,
+            'bf'  : bf,
+            't'   : t,
+            'Ag'  : Ag,
+            'Peso': Tb('peso'),
+        }
+        
+        props['flexion'] = {
+            'Ix': Tb('Ix'), 'Sx': Tb('Sx'), 'rx': Tb('rx'), 'Zx': Tb('Zx'),
+            'Iy': Tb('Iy'), 'Sy': Tb('Sy'), 'ry': Tb('ry'), 'Zy': Tb('Zy'),
+        }
+        
+        props['torsion'] = {'J': Tb('J'), 'Cw': Tb('Cw')}
+        
+        props['seccion'] = {
+            'd'  : d,
+            'bf' : bf,
+            't'  : t,
+            'd_t': d / t if t > 0 else 0.0,
+        }
+        
+        props['centro_corte'] = {
+            'xo': 0.0,
+            'yo': 0.0,
+            'ro': np.sqrt(Tb('rx')**2 + Tb('ry')**2),
+            'H' : 1.0,
+        }
+        
+        props['disponibles'] = [
+            'd', 'bf', 't', 'Ag', 'Ix', 'Iy', 'Sx', 'Sy', 
+            'rx', 'ry', 'Zx', 'Zy', 'J', 'Cw',
+        ]
+
     else:
         raise ValueError(
             f"Tipo '{tipo}' no soportado. "
@@ -403,15 +717,23 @@ def extraer_propiedades(perfil: pd.Series, base_datos: str = 'CIRSOC') -> dict:
 # ============================================================================
 
 _REQUERIDAS = {
-    'DOBLE_T': ['d', 'bf', 'tf', 'tw', 'hw', 'Ag', 'Ix', 'Iy', 'rx', 'ry'],
-    'CANAL'  : ['d', 'bf', 'tf', 'tw', 'hw', 'Ag', 'Ix', 'Iy', 'rx', 'ry'],
-    'ANGULAR': ['b', 't', 'Ag', 'Ix', 'rx'],
+    'DOBLE_T'   : ['d', 'bf', 'tf', 'tw', 'hw', 'Ag', 'Ix', 'Iy', 'rx', 'ry'],
+    'CANAL'     : ['d', 'bf', 'tf', 'tw', 'hw', 'Ag', 'Ix', 'Iy', 'rx', 'ry'],
+    'ANGULAR'   : ['b', 't', 'Ag', 'Ix', 'rx'],
+    'PERFIL_T'  : ['d', 'bf', 'tf', 'Ag', 'Ix', 'Iy', 'rx', 'ry'],
+    'TUBO_CIRC' : ['d', 't', 'Ag', 'Ix', 'rx'],
+    'TUBO_CUAD' : ['d', 't', 'Ag', 'Ix', 'rx'],
+    'TUBO_RECT' : ['d', 'bf', 't', 'Ag', 'Ix', 'Iy', 'rx', 'ry'],
 }
 
 _OPCIONALES_IMPORTANTES = {
-    'DOBLE_T': ['J', 'Cw'],
-    'CANAL'  : ['J', 'Cw', 'x', 'eo'],
-    'ANGULAR': ['J', 'Cw'],
+    'DOBLE_T'   : ['J', 'Cw'],
+    'CANAL'     : ['J', 'Cw', 'x', 'eo'],
+    'ANGULAR'   : ['J', 'Cw'],
+    'PERFIL_T'  : ['J', 'Cw'],
+    'TUBO_CIRC' : ['J'],
+    'TUBO_CUAD' : ['J'],
+    'TUBO_RECT' : ['J'],
 }
 
 
@@ -497,6 +819,8 @@ _DISPLAY_UNIDADES = {
     'bf_2tf': ('—',    1.0),
     'hw_tw' : ('—',    1.0),
     'b_t'   : ('—',    1.0),
+    'd_t'   : ('—',    1.0),
+    'd_tw'  : ('—',    1.0),
     'H'     : ('—',    1.0),
 }
 

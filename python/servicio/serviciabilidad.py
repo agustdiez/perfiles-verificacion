@@ -105,6 +105,7 @@ def _q_adm_Nmm(L: float, I: float, delta: float, k: float) -> float:
 def serviciabilidad(perfil_nombre: str,
                     L: float,
                     db_manager,
+                    tipo_perfil: str = None,
                     esquema: str = 'SIMPLE',
                     fracciones: list = None) -> dict:
     """
@@ -112,9 +113,11 @@ def serviciabilidad(perfil_nombre: str,
 
     Parámetros:
     -----------
-    perfil_nombre : str             — Designación del perfil (ej: '18x97', 'W18X97')
+    perfil_nombre : str             — Designación del perfil (ej: '18x97', 'W18X97', '100')
     L             : float           — Longitud del elemento [mm]
     db_manager    : GestorBaseDatos — Instancia con la BD activa
+    tipo_perfil   : str, opcional   — Tipo para búsqueda exacta (ej: 'IPE', 'IPN')
+                                      Requerido si perfil_nombre es ambiguo
     esquema       : str             — 'CANTILEVER' | 'SIMPLE' | 'EMPOTRADA'
     fracciones    : list[int]       — Denominadores δ_adm = L/n (ej: [100, 200, 300])
                                       Si None usa defaults por esquema
@@ -159,7 +162,7 @@ def serviciabilidad(perfil_nombre: str,
     )
 
     # ── Propiedades del perfil ───────────────────────────────────────────
-    perfil    = db_manager.obtener_datos_perfil(perfil_nombre)
+    perfil    = db_manager.obtener_datos_perfil(perfil_nombre, tipo=tipo_perfil)
     bd_nombre = db_manager.nombre_base_activa()
     props     = extraer_propiedades(perfil, base_datos=bd_nombre)
     familia   = props['familia']

@@ -27,6 +27,7 @@ def interaccion(perfil_nombre: str,
                 db_manager,
                 Nu: float,
                 Mu: float,
+                tipo_perfil: str = None,
                 Lz: float = None,
                 Kx: float = 1.0,
                 Ky: float = 1.0,
@@ -36,10 +37,18 @@ def interaccion(perfil_nombre: str,
     """
     Parámetros:
     -----------
-    Lx, Ly, Lz  : longitudes de pandeo [mm]
-    Lb          : longitud sin arriostrar lateral [mm]
-    Nu          : carga axial de compresión de diseño [kN]
-    Mu          : momento flector de diseño [kN·m]
+    perfil_nombre   : str   — designación del perfil (ej: 'W310x97', '100')
+    Fy              : float — tensión de fluencia [MPa]
+    Lx, Ly, Lz      : float — longitudes de pandeo [mm]
+    Lb              : float — longitud sin arriostrar lateral [mm]
+    db_manager      : GestorBaseDatos
+    Nu              : float — carga axial de compresión de diseño [kN]
+    Mu              : float — momento flector de diseño [kN·m]
+    tipo_perfil     : str, opcional — tipo para búsqueda exacta (ej: 'IPE', 'IPN')
+                                      Requerido si perfil_nombre es ambiguo
+    Lz, Kx, Ky, Kz  : float — parámetros de pandeo
+    Cb              : float — factor momento (default: 1.0)
+    mostrar_calculo : bool
 
     Returns dict:
         'ratio' [adim], 'cumple' [bool], 'ecuacion', 'Pd' [kN], 'Md' [kN·m]
@@ -50,12 +59,12 @@ def interaccion(perfil_nombre: str,
     advertencias = []
 
     res_comp = compresion(
-        perfil_nombre=perfil_nombre, Fy=Fy,
+        perfil_nombre=perfil_nombre, tipo_perfil=tipo_perfil, Fy=Fy,
         Lx=Lx, Ly=Ly, db_manager=db_manager, Lz=Lz,
         Kx=Kx, Ky=Ky, Kz=Kz, mostrar_calculo=False,
     )
     res_flex = flexion(
-        perfil_nombre=perfil_nombre, Fy=Fy,
+        perfil_nombre=perfil_nombre, tipo_perfil=tipo_perfil, Fy=Fy,
         Lb=Lb, db_manager=db_manager, Cb=Cb, mostrar_calculo=False,
     )
 

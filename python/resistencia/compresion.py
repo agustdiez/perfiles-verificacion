@@ -93,6 +93,7 @@ def compresion(perfil_nombre: str,
                Lx: float,
                Ly: float,
                db_manager,
+               tipo_perfil: str = None,
                Lz: float = None,
                Kx: float = 1.0,
                Ky: float = 1.0,
@@ -106,11 +107,13 @@ def compresion(perfil_nombre: str,
 
     Parámetros:
     -----------
-    perfil_nombre  : str             — Designación (ej: 'W310x97', 'C15x50')
+    perfil_nombre  : str             — Designación (ej: 'W310x97', 'C15x50', '100')
     Fy             : float           — Tensión de fluencia [MPa]
     Lx             : float           — Longitud de pandeo eje X [mm]
     Ly             : float           — Longitud de pandeo eje Y [mm]
     db_manager     : GestorBaseDatos — Instancia con la BD activa (CIRSOC o AISC)
+    tipo_perfil    : str, opcional   — Tipo para búsqueda exacta (ej: 'IPE', 'IPN')
+                                       Requerido si perfil_nombre es ambiguo
     Lz             : float, opcional — Longitud pandeo torsional [mm]
                                        (default: max(Lx, Ly))
     Kx, Ky, Kz     : float           — Factores de longitud efectiva (default: 1.0)
@@ -147,7 +150,7 @@ def compresion(perfil_nombre: str,
     # PASO 1: OBTENER DATOS DEL PERFIL                                   #
     # ================================================================== #
 
-    perfil    = db_manager.obtener_datos_perfil(perfil_nombre)
+    perfil    = db_manager.obtener_datos_perfil(perfil_nombre, tipo=tipo_perfil)
     bd_nombre = db_manager.nombre_base_activa()
     tipo      = str(perfil['Tipo']).strip()
     latex_doc.append(f"\\text{{Base de datos: {bd_nombre}}}")
