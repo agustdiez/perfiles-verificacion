@@ -1,0 +1,13 @@
+name: perfiles-verificacion
+title: perfiles-verificacion
+username: adiez
+account: adiez
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 16774541
+bundleId: 11635595
+url: https://adiez.shinyapps.io/perfiles-verificacion/
+version: 1
+asMultiple: FALSE
+asStatic: FALSE
+ignoredFiles: documentacion/ANALISIS_COMPRESION.md|documentacion/IMPLEMENTACION_FINAL.md|documentacion/SteelCheck_Modos_de_Falla_AISC360.docx|ESPECIFICACION_FLEXION_CAMBIOS.md|GUIA_INTEGRACION_FACTOR_Q.md|INSTRUCCIONES_FINALES.md|LICENSE|pca/pca_cirsoc.ipynb|README.html|README.md|REDISENO_APP.md|RESUMEN_CAMBIOS.md|checks

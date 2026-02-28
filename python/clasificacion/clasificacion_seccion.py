@@ -12,9 +12,13 @@ Clasificaciones posibles:
     ESBELTA     : algún elemento tiene λ > λr
 
 Tipos de perfil soportados:
-    Doble T : W, M, HP, IPE, IPN, IPB, IPBl, IPBv
-    Canal   : C, MC, UPN
-    Angular : L
+    Doble T       : W, M, HP, S, IPE, IPN, IPB, IPBl, IPBv
+    Canal         : C, MC, UPN
+    Angular       : L
+    Perfil T      : T, WT, MT, ST
+    Tubo Circular : TUBO CIRC., PIPE
+    Tubo Cuadrado : TUBO CUAD., HSS (cuadrado)
+    Tubo Rect.    : TUBO RECT., HSS (rectangular)
 """
 
 import numpy as np
@@ -73,6 +77,51 @@ def _limites_pata_angular(E: float, Fy: float) -> tuple[float, float]:
     return 0.38 * raiz, 0.45 * raiz
 
 
+def _limites_ala_perfil_t(E: float, Fy: float) -> tuple[float, float]:
+    """
+    Ala de perfil T (WT, MT, ST, T).
+    Voladizo desde el alma.  λ = bf / (2·tf)
+    Ref: AISC 360-10 Tabla B4.1a, caso 1 (compresión)
+    """
+    raiz = np.sqrt(E / Fy)
+    return 0.38 * raiz, 1.00 * raiz
+
+
+def _limites_alma_perfil_t(E: float, Fy: float) -> tuple[float, float]:
+    """
+    Alma de perfil T (stem).  λ = d / tw
+    Ref: AISC 360-10 Tabla B4.1a, caso 4
+    """
+    raiz = np.sqrt(E / Fy)
+    # Compresión: λr = 0.75·√(E/Fy) según caso 4
+    # No hay λp para stem en compresión (solo λr)
+    return None, 0.75 * raiz
+
+
+def _limites_tubo_circular(E: float, Fy: float) -> tuple[float, float]:
+    """
+    Tubo circular (PIPE, TUBO CIRC.).  λ = D / t
+    Ref: AISC 360-10 Tabla B4.1a, caso 9 (compresión)
+    """
+    raiz = np.sqrt(E / Fy)
+    # Compresión: λr = 0.11·E/Fy
+    # No hay λp para tubos circulares en compresión
+    return None, 0.11 * (E / Fy)
+
+
+def _limites_tubo_rectangular_pared(E: float, Fy: float) -> tuple[float, float]:
+    """
+    Paredes de tubo rectangular/cuadrado (HSS, TUBO CUAD., TUBO RECT.).
+    λ = b / t  (para flanges)
+    λ = h / t  (para webs)
+    Ref: AISC 360-10 Tabla B4.1a, caso 6 (compresión)
+    """
+    raiz = np.sqrt(E / Fy)
+    # Compresión: λr = 1.40·√(E/Fy)
+    # No hay λp para HSS en compresión
+    return None, 1.40 * raiz
+
+
 # ============================================================================
 # FACTOR Q PARA ELEMENTOS ESBELTOS (AISC 360-10 Sección E7)
 # ============================================================================
@@ -108,6 +157,60 @@ def _calcular_qs_angular(bt_ratio: float, E: float, Fy: float) -> float:
         return 1.34 - 0.76 * bt_ratio * np.sqrt(Fy / E)
     else:
         return 0.53 * E / (Fy * bt_ratio**2)
+
+
+def _calcular_qs_stem_perfil_t(dt_ratio: float, E: float, Fy: float) -> float:
+    """
+    Qs para stem (alma) de perfiles T - AISC E7 Ec. E7-7 a E7-9
+    d/t = d/tw (altura del stem / espesor)
+    """
+    raiz_E_Fy = np.sqrt(E / Fy)
+    
+    if dt_ratio <= 0.75 * raiz_E_Fy:
+        return 1.0
+    elif dt_ratio <= 1.03 * raiz_E_Fy:
+        return 1.908 - 1.22 * dt_ratio * np.sqrt(Fy / E)
+    else:
+        return 0.69 * E / (Fy * dt_ratio**2)
+
+
+def _calcular_q_tubo_circular(Dt_ratio: float, E: float, Fy: float) -> float:
+    """
+    Q para tubos circulares - AISC E7 Sección E7.2(c)
+    D/t = diámetro exterior / espesor de pared
+    
+    Para tubos circulares: Q se calcula directamente (no hay separación Qs/Qa)
+    """
+    limite = 0.11 * E / Fy
+    
+    if Dt_ratio <= limite:
+        return 1.0
+    else:
+        # AISC E7-19: Fcr = 0.038E / (D/t)
+        # Q efectivo se deriva de la reducción de Fcr
+        return 0.038 * E / (Fy * Dt_ratio)
+
+
+def _calcular_qa_hss_pared(bt_ratio: float, E: float, Fcr: float) -> float:
+    """
+    Qa para paredes de HSS rectangulares/cuadrados - AISC E7 Ec. E7-16, E7-17
+    Similar al cálculo para almas, pero para paredes de HSS
+    
+    b/t = ancho de pared / espesor
+    """
+    raiz_E_f = np.sqrt(E / Fcr)
+    
+    if bt_ratio < 1.40 * raiz_E_f:
+        return 1.0
+    
+    # Ancho efectivo
+    factor = raiz_E_f / bt_ratio
+    be_b = (1.0 - 0.34 * factor) * factor
+    
+    # Limitar
+    be_b = min(max(be_b, 0.0), 1.0)
+    
+    return be_b
 
 
 def _calcular_qa_alma(hw_tw: float, E: float, Fcr: float, 
@@ -188,9 +291,9 @@ def calcular_Q(props: dict, Fy: float, E: float = 200_000,
         return {'Q': 1.0, 'Qs': 1.0, 'Qa': 1.0, 'notas': notas}
     
     # ------------------------------------------------------------------ #
-    # DOBLE T                                                             #
+    # DOBLE T (incluyendo S-shapes)                                       #
     # ------------------------------------------------------------------ #
-    if tipo in ['W', 'M', 'HP', 'IPE', 'IPN', 'IPB', 'IPBl', 'IPBv']:
+    if tipo in ['W', 'M', 'HP', 'S', 'IPE', 'IPN', 'IPB', 'IPBl', 'IPBv']:
         
         # Ala: elemento no rigidizado
         if clasificacion['elementos']['ala']['clase'] == 'ESBELTA':
@@ -204,8 +307,8 @@ def calcular_Q(props: dict, Fy: float, E: float = 200_000,
                 notas.append("ADVERTENCIA: Fcr no proporcionado, Qa = 1.0 (conservador)")
             else:
                 hw_tw = props['seccion']['hw_tw']
-                hw = props['geometria']['h'] - 2 * props['geometria']['tf']
-                A_total = props['seccion']['A']
+                hw = props['basicas']['d'] - 2 * props['seccion']['tf']
+                A_total = props['basicas']['Ag']
                 Qa = _calcular_qa_alma(hw_tw, E, Fcr, hw, A_total)
                 notas.append(f"Alma esbelta: hw/tw = {hw_tw:.2f}, Qa = {Qa:.4f}")
     
@@ -226,8 +329,8 @@ def calcular_Q(props: dict, Fy: float, E: float = 200_000,
                 notas.append("ADVERTENCIA: Fcr no proporcionado, Qa = 1.0 (conservador)")
             else:
                 hw_tw = props['seccion']['hw_tw']
-                hw = props['geometria']['h'] - 2 * props['geometria']['tf']
-                A_total = props['seccion']['A']
+                hw = props['basicas']['d'] - 2 * props['seccion']['tf']
+                A_total = props['basicas']['Ag']
                 Qa = _calcular_qa_alma(hw_tw, E, Fcr, hw, A_total)
                 notas.append(f"Alma esbelta: hw/tw = {hw_tw:.2f}, Qa = {Qa:.4f}")
     
@@ -241,8 +344,80 @@ def calcular_Q(props: dict, Fy: float, E: float = 200_000,
             Qs = _calcular_qs_angular(bt, E, Fy)
             notas.append(f"Pata esbelta: b/t = {bt:.2f}, Qs = {Qs:.4f}")
     
+    # ------------------------------------------------------------------ #
+    # PERFIL T                                                            #
+    # ------------------------------------------------------------------ #
+    elif tipo in ['T', 'WT', 'MT', 'ST']:
+        
+        # Ala: elemento no rigidizado
+        if 'ala' in clasificacion['elementos'] and \
+           clasificacion['elementos']['ala']['clase'] == 'ESBELTA':
+            bt_ala = props['seccion']['bf_2tf']
+            Qs = _calcular_qs_ala_laminada(bt_ala, E, Fy)
+            notas.append(f"Ala esbelta: bf/2tf = {bt_ala:.2f}, Qs = {Qs:.4f}")
+        
+        # Stem (alma): elemento no rigidizado para T
+        if 'stem' in clasificacion['elementos'] and \
+           clasificacion['elementos']['stem']['clase'] == 'ESBELTA':
+            dt = props['seccion'].get('d_tw', props['seccion'].get('hw_tw', 0))
+            if dt > 0:
+                Qs_stem = _calcular_qs_stem_perfil_t(dt, E, Fy)
+                Qs = min(Qs, Qs_stem)  # Tomar el menor
+                notas.append(f"Stem esbelta: d/tw = {dt:.2f}, Qs_stem = {Qs_stem:.4f}")
+    
+    # ------------------------------------------------------------------ #
+    # TUBO CIRCULAR                                                       #
+    # ------------------------------------------------------------------ #
+    elif tipo in ['TUBO CIRC.', 'PIPE']:
+        
+        if 'pared' in clasificacion['elementos'] and \
+           clasificacion['elementos']['pared']['clase'] == 'ESBELTA':
+            Dt = props['seccion'].get('D_t', 0)
+            if Dt > 0:
+                Q_tubo = _calcular_q_tubo_circular(Dt, E, Fy)
+                # Para tubos circulares, Q se calcula directamente (no Qs × Qa)
+                Qs = Q_tubo
+                Qa = 1.0
+                notas.append(f"Tubo circular esbelta: D/t = {Dt:.2f}, Q = {Q_tubo:.4f}")
+    
+    # ------------------------------------------------------------------ #
+    # TUBO RECTANGULAR/CUADRADO                                           #
+    # ------------------------------------------------------------------ #
+    elif tipo in ['TUBO CUAD.', 'TUBO RECT.', 'HSS']:
+        
+        # Para HSS, todas las paredes son elementos rigidizados
+        Qa_min = 1.0
+        
+        if 'flange' in clasificacion['elementos'] and \
+           clasificacion['elementos']['flange']['clase'] == 'ESBELTA':
+            if Fcr is not None:
+                bt_flange = props['seccion'].get('b_t', 0)
+                if bt_flange > 0:
+                    Qa_flange = _calcular_qa_hss_pared(bt_flange, E, Fcr)
+                    Qa_min = min(Qa_min, Qa_flange)
+                    notas.append(f"Flange esbelta: b/t = {bt_flange:.2f}, Qa = {Qa_flange:.4f}")
+        
+        if 'web' in clasificacion['elementos'] and \
+           clasificacion['elementos']['web']['clase'] == 'ESBELTA':
+            if Fcr is not None:
+                ht_web = props['seccion'].get('h_tw', 0)
+                if ht_web > 0:
+                    Qa_web = _calcular_qa_hss_pared(ht_web, E, Fcr)
+                    Qa_min = min(Qa_min, Qa_web)
+                    notas.append(f"Web esbelta: h/t = {ht_web:.2f}, Qa = {Qa_web:.4f}")
+        
+        if Fcr is None and Qa_min < 1.0:
+            notas.append("ADVERTENCIA: Fcr no proporcionado, Qa = 1.0 (conservador)")
+            Qa_min = 1.0
+        
+        Qa = Qa_min
+    
     else:
-        raise ValueError(f"Tipo '{tipo}' no soportado.")
+        raise ValueError(
+            f"Tipo '{tipo}' no soportado en calcular_Q. "
+            f"Válidos: W, M, HP, S, IPE, IPN, IPB, IPBl, IPBv, C, MC, UPN, L, "
+            f"T, WT, MT, ST, TUBO CIRC., PIPE, TUBO CUAD., TUBO RECT., HSS."
+        )
     
     # Limitar Qs según AISC: 0.35 ≤ Qs ≤ 0.76
     if Qs < 0.35:
@@ -324,9 +499,9 @@ def clasificar_seccion(props: dict, Fy: float,
     advertencias = []
 
     # ------------------------------------------------------------------ #
-    # DOBLE T                                                             #
+    # DOBLE T (incluyendo S-shapes)                                       #
     # ------------------------------------------------------------------ #
-    if tipo in ['W', 'M', 'HP', 'IPE', 'IPN', 'IPB', 'IPBl', 'IPBv']:
+    if tipo in ['W', 'M', 'HP', 'S', 'IPE', 'IPN', 'IPB', 'IPBl', 'IPBv']:
 
         lp, lr = _limites_ala_doble_t(E, Fy)
         elementos['ala'] = _clasificar_elemento(
@@ -365,10 +540,75 @@ def clasificar_seccion(props: dict, Fy: float,
             "(0.38·√(E/Fy)). Verificar aplicabilidad según caso de carga."
         )
 
+    # ------------------------------------------------------------------ #
+    # PERFIL T                                                            #
+    # ------------------------------------------------------------------ #
+    elif tipo in ['T', 'WT', 'MT', 'ST']:
+
+        lp, lr = _limites_ala_perfil_t(E, Fy)
+        elementos['ala'] = _clasificar_elemento(
+            'Ala (bf/2tf)', props['seccion']['bf_2tf'], lp, lr
+        )
+        
+        lp, lr = _limites_alma_perfil_t(E, Fy)
+        d_tw = props['seccion'].get('d_tw', props['seccion'].get('hw_tw', 0))
+        elementos['stem'] = _clasificar_elemento(
+            'Stem (d/tw)', d_tw, lp, lr
+        )
+        advertencias.append(
+            "Perfil T: Stem no tiene λp en compresión (solo λr). "
+            "Clasificación: COMPACTA o NO_COMPACTA no aplica para stem."
+        )
+
+    # ------------------------------------------------------------------ #
+    # TUBO CIRCULAR                                                       #
+    # ------------------------------------------------------------------ #
+    elif tipo in ['TUBO CIRC.', 'PIPE']:
+
+        lp, lr = _limites_tubo_circular(E, Fy)
+        D_t = props['seccion'].get('D_t', 0)
+        if D_t > 0:
+            elementos['pared'] = _clasificar_elemento(
+                'Pared (D/t)', D_t, lp, lr
+            )
+        else:
+            advertencias.append("D/t no disponible para tubo circular")
+        
+        advertencias.append(
+            "Tubo circular: No hay λp en compresión (solo λr = 0.11·E/Fy)."
+        )
+
+    # ------------------------------------------------------------------ #
+    # TUBO RECTANGULAR/CUADRADO                                           #
+    # ------------------------------------------------------------------ #
+    elif tipo in ['TUBO CUAD.', 'TUBO RECT.', 'HSS']:
+
+        lp, lr = _limites_tubo_rectangular_pared(E, Fy)
+        
+        # Flange (ancho)
+        b_t = props['seccion'].get('b_t', 0)
+        if b_t > 0:
+            elementos['flange'] = _clasificar_elemento(
+                'Flange (b/t)', b_t, lp, lr
+            )
+        
+        # Web (altura) - solo para rectangulares
+        if tipo in ['TUBO RECT.', 'HSS']:
+            h_tw = props['seccion'].get('h_tw', 0)
+            if h_tw > 0:
+                elementos['web'] = _clasificar_elemento(
+                    'Web (h/t)', h_tw, lp, lr
+                )
+        
+        advertencias.append(
+            "Tubo HSS: No hay λp en compresión (solo λr = 1.40·√(E/Fy))."
+        )
+
     else:
         raise ValueError(
             f"Tipo '{tipo}' no soportado. "
-            f"Válidos: W, M, HP, IPE, IPN, IPB, IPBl, IPBv, C, MC, UPN, L."
+            f"Válidos: W, M, HP, S, IPE, IPN, IPB, IPBl, IPBv, C, MC, UPN, L, "
+            f"T, WT, MT, ST, TUBO CIRC., PIPE, TUBO CUAD., TUBO RECT., HSS."
         )
 
     # Clase global

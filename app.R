@@ -83,34 +83,43 @@ calcular_Pd_punto <- function(perfil_nombre, tipo_perfil, Fy, L_mm, Kx, Ky, Kz) 
 }
 
 generar_curva_Md <- function(perfil_nombre, tipo_perfil, Fy) {
-  Md_vec <- numeric(length(L_PUNTOS))
+  Mdx_vec <- numeric(length(L_PUNTOS))
+  Mdy_vec <- numeric(length(L_PUNTOS))
   for (i in seq_along(L_PUNTOS)) {
     tryCatch({
       res <- flex_mod$flexion(
         perfil_nombre=perfil_nombre, tipo_perfil=tipo_perfil, Fy=Fy,
         Lb=L_PUNTOS[i], db_manager=db_manager,
-        Cb=1.0, mostrar_calculo=FALSE
+        calcular_ambos_ejes=TRUE, Cb=1.0, mostrar_calculo=FALSE
       )
-      Md_vec[i] <- res$Md
-    }, error = function(e) { Md_vec[i] <<- NA_real_ })
+      Mdx_vec[i] <- res$Mdx
+      Mdy_vec[i] <- if (!is.null(res$Mdy)) res$Mdy else NA
+    }, error = function(e) { 
+      Mdx_vec[i] <<- NA_real_
+      Mdy_vec[i] <<- NA_real_
+    })
   }
-  data.frame(Lb_m = L_PUNTOS / 1000, Md = Md_vec, perfil = perfil_nombre)
+  data.frame(Lb_m = L_PUNTOS / 1000, Mdx = Mdx_vec, Mdy = Mdy_vec, perfil = perfil_nombre)
 }
+
 
 calcular_Md_punto <- function(perfil_nombre, tipo_perfil, Fy, Lb_mm) {
   tryCatch({
     res <- flex_mod$flexion(
       perfil_nombre=perfil_nombre, tipo_perfil=tipo_perfil, Fy=Fy,
       Lb=Lb_mm, db_manager=db_manager,
-      Cb=1.0, mostrar_calculo=FALSE
+      calcular_ambos_ejes=TRUE, Cb=1.0, mostrar_calculo=FALSE
     )
-    list(Md=res$Md, Mn=res$Mn, Mp=res$Mp,
+    list(Mdx=res$Mdx, Mnx=res$Mnx, Mpx=res$Mpx,
+         Mdy=res$Mdy, Mny=res$Mny, Mpy=res$Mpy,
          Lp=res$Lp, Lr=res$Lr,
-         modo=res$modo, advertencias=res$advertencias)
-  }, error = function(e) list(Md=NA_real_, error=conditionMessage(e)))
+         modo_x=res$modo_x, modo_y=res$modo_y,
+         advertencias=res$advertencias)
+  }, error = function(e) list(Mdx=NA_real_, Mdy=NA_real_, error=conditionMessage(e)))
 }
 
-calcular_interaccion <- function(perfil_nombre, tipo_perfil, Fy, L_mm, Lb_mm, Nu, Mu, Kx, Ky, Kz) {
+
+calcular_interaccion <- function(perfil_nombre, tipo_perfil, Fy, L_mm, Lb_mm, Nu, Mux, Muy, Kx, Ky, Kz) {
   tryCatch({
     py$`_ia_p`    <- perfil_nombre
     py$`_ia_tipo` <- tipo_perfil
@@ -118,7 +127,8 @@ calcular_interaccion <- function(perfil_nombre, tipo_perfil, Fy, L_mm, Lb_mm, Nu
     py$`_ia_Lm`   <- L_mm
     py$`_ia_Lb`   <- Lb_mm
     py$`_ia_Nu`   <- Nu
-    py$`_ia_Mu`   <- Mu
+    py$`_ia_Mux`  <- Mux
+    py$`_ia_Muy`  <- Muy
     py$`_ia_Kx`   <- Kx
     py$`_ia_Ky`   <- Ky
     py$`_ia_Kz`   <- Kz
@@ -128,7 +138,7 @@ _res_ia = _fn_ia(
     perfil_nombre=_ia_p, tipo_perfil=_ia_tipo, Fy=_ia_Fy,
     Lx=_ia_Lm, Ly=_ia_Lm, Lb=_ia_Lb,
     db_manager=_db_manager,
-    Nu=_ia_Nu, Mu=_ia_Mu,
+    Nu=_ia_Nu, Mux=_ia_Mux, Muy=_ia_Muy,
     Kx=_ia_Kx, Ky=_ia_Ky, Kz=_ia_Kz,
     mostrar_calculo=False
 )
@@ -211,6 +221,24 @@ ui <- page_fluid(
     bg="#ffffff", fg="#0f172a", primary="#ef4444", secondary="#3b82f6",
     base_font=font_google("Inter"), code_font=font_google("JetBrains Mono"),
     heading_font=font_google("Outfit")
+  ),
+
+  # MathJax para renderizar LaTeX
+  tags$head(
+    tags$script(src="https://polyfill.io/v3/polyfill.min.js?features=es6"),
+    tags$script(id="MathJax-script", async=NA, 
+                src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"),
+    tags$script(HTML("
+      window.MathJax = {
+        tex: {
+          inlineMath: [['$', '$'], ['\\\\(', '\\\\)']],
+          displayMath: [['$$', '$$'], ['\\\\[', '\\\\]']]
+        },
+        svg: {
+          fontCache: 'global'
+        }
+      };
+    "))
   ),
 
   tags$head(tags$style(HTML("
@@ -763,7 +791,14 @@ ui <- page_fluid(
       ),
 
       div(class="section-divider", "Propiedades del Acero"),
-      numericInput("Fy", "Fy [MPa]", value=235, min=100, max=700, width="100%"),
+      # Selector de calidad de acero
+      selectInput("steel_grade", "Acero",
+                  choices = c("F-24 (240 MPa)" = "240",
+                              "A36 (248 MPa)" = "248",
+                              "A572 Gr50 (345 MPa)" = "345",
+                              "F-36 (360 MPa)" = "360"),
+                  selected = "248",
+                  width = "100%"),
 
       div(class="section-divider", "Longitudes de Pandeo"),
       fluidRow(
@@ -778,7 +813,10 @@ ui <- page_fluid(
 
       div(class="section-divider", "Cargas (Interacción H1-1)"),
       numericInput("Nu", "Nu [kN]", value=0, min=0, width="100%"),
-      numericInput("Mu", "Mu [kN·m]", value=0, min=0, width="100%"),
+      div(style="display: flex; gap: 8px;",
+        numericInput("Mux", "Mux [kN·m]", value=0, min=0, width="100%"),
+        numericInput("Muy", "Muy [kN·m]", value=0, min=0, width="100%")
+      ),
 
       actionButton("btn_graficar", "CALCULAR Y GRAFICAR", class="btn-calculate"),
       downloadButton("btn_exportar", "📄 Exportar TXT", class="btn-secondary-action"),
@@ -852,6 +890,9 @@ ui <- page_fluid(
 
 server <- function(input, output, session) {
 
+  # Variable reactiva: Fy (tensión de fluencia)
+  Fy <- reactive({ as.numeric(input$steel_grade) })
+
   # Actualizar familias cuando cambia la base de datos
   observeEvent(input$db_activa, {
     db_manager$cambiar_base(input$db_activa)
@@ -861,20 +902,80 @@ server <- function(input, output, session) {
   })
 
   # Actualizar perfiles cuando cambia la familia
+  # Función para ordenar perfiles inteligentemente
+  ordenar_perfiles <- function(perfiles) {
+    if (length(perfiles) == 0) return(perfiles)
+    
+    # Función auxiliar para extraer componentes numéricos
+    extraer_numeros <- function(perfil) {
+      # Para perfiles tipo W18X97: extraer 18 y 97
+      if (grepl("^[A-Z]+\\d+X\\d+", perfil, ignore.case=TRUE)) {
+        partes <- strsplit(gsub("[A-Z]+", "", perfil, ignore.case=TRUE), "X")[[1]]
+        return(list(tipo="WxP", num1=as.numeric(partes[1]), num2=as.numeric(partes[2])))
+      }
+      # Para perfiles que empiezan con número (IPE, IPN, etc.): 100, 200, 1000
+      else if (grepl("^\\d+", perfil)) {
+        num <- as.numeric(gsub("[^0-9].*", "", perfil))
+        return(list(tipo="NUM", num1=num, num2=0))
+      }
+      # Para perfiles alfabéticos
+      else {
+        return(list(tipo="ALPHA", num1=0, num2=0, texto=perfil))
+      }
+    }
+    
+    # Crear data frame con info de ordenamiento
+    df <- data.frame(
+      perfil = perfiles,
+      stringsAsFactors = FALSE
+    )
+    
+    df$info <- lapply(perfiles, extraer_numeros)
+    df$tipo <- sapply(df$info, function(x) x$tipo)
+    df$num1 <- sapply(df$info, function(x) x$num1)
+    df$num2 <- sapply(df$info, function(x) x$num2)
+    
+    # Ordenar según el tipo
+    # NUM: orden decreciente (1000, 200, 100)
+    # WxP: primero por num1 creciente, luego num2 creciente (W6X9, W6X12, W8X10)
+    # ALPHA: alfabético
+    df_num <- df[df$tipo == "NUM", ]
+    df_wxp <- df[df$tipo == "WxP", ]
+    df_alpha <- df[df$tipo == "ALPHA", ]
+    
+    if (nrow(df_num) > 0) {
+      df_num <- df_num[order(-df_num$num1), ]  # Decreciente
+    }
+    if (nrow(df_wxp) > 0) {
+      df_wxp <- df_wxp[order(df_wxp$num1, df_wxp$num2), ]  # Creciente por altura, luego peso
+    }
+    if (nrow(df_alpha) > 0) {
+      df_alpha <- df_alpha[order(df_alpha$perfil), ]  # Alfabético
+    }
+    
+    # Combinar: primero alfabéticos, luego WxP, luego numéricos
+    resultado <- c(df_alpha$perfil, df_wxp$perfil, df_num$perfil)
+    return(resultado)
+  }
+  
+  # Actualizar perfiles cuando cambia la familia
   observe({
     req(input$fam1)
     p <- db_manager$obtener_perfiles_por_familia(input$fam1)
-    updateSelectInput(session, "perf1", choices=p, selected=if(length(p)>0) p[1] else NULL)
+    p_ordenados <- ordenar_perfiles(p)
+    updateSelectInput(session, "perf1", choices=p_ordenados, selected=if(length(p_ordenados)>0) p_ordenados[1] else NULL)
   })
   observe({
     req(input$fam2, input$usar_p2)
     p <- db_manager$obtener_perfiles_por_familia(input$fam2)
-    updateSelectInput(session, "perf2", choices=p, selected=if(length(p)>0) p[1] else NULL)
+    p_ordenados <- ordenar_perfiles(p)
+    updateSelectInput(session, "perf2", choices=p_ordenados, selected=if(length(p_ordenados)>0) p_ordenados[1] else NULL)
   })
   observe({
     req(input$fam3, input$usar_p3)
     p <- db_manager$obtener_perfiles_por_familia(input$fam3)
-    updateSelectInput(session, "perf3", choices=p, selected=if(length(p)>0) p[1] else NULL)
+    p_ordenados <- ordenar_perfiles(p)
+    updateSelectInput(session, "perf3", choices=p_ordenados, selected=if(length(p_ordenados)>0) p_ordenados[1] else NULL)
   })
 
   # Inicializar familias al cargar
@@ -925,21 +1026,60 @@ server <- function(input, output, session) {
       "#64748b"
     )
     
+    # Mapeo de archivos de imagen según familia
+    # Las imágenes deben estar en: img/NOMBRE_FAMILIA.png
+    imagen_path <- switch(familia,
+      DOBLE_T = "img/doble_t.png",
+      CANAL = "img/canal.png",
+      ANGULAR = "img/angular.png",
+      PERFIL_T = "img/perfil_t.png",
+      TUBO_CIRC = "img/tubo_circular.png",
+      TUBO_CUAD = "img/tubo_cuadrado.png",
+      TUBO_RECT = "img/tubo_rectangular.png",
+      NULL
+    )
+    
+    # Verificar si existe la imagen
+    mostrar_imagen <- !is.null(imagen_path) && file.exists(imagen_path)
+    
     modal_titulo <- paste0(perfil_nombre, "  —  ", tipo)
 
     showModal(modalDialog(
-      title = modal_titulo, size = "l", easyClose = TRUE,
+      title = modal_titulo, size = "xl", easyClose = TRUE,
       footer = modalButton("Cerrar"),
-      div(style="max-height:500px;overflow-y:auto;",
-        tags$span(class="props-badge", 
-                  style=paste0("background:",badge_color,";color:white;"), 
-                  familia),
-        tags$table(class="props-table",
-          render_props_seccion(props$basicas, props$basicas_uds, "PROPIEDADES BÁSICAS"),
-          render_props_seccion(props$flexion, props$flexion_uds, "FLEXIÓN"),
-          render_props_seccion(props$torsion, props$torsion_uds, "TORSIÓN"),
-          render_props_seccion(props$seccion, props$seccion_uds, "RELACIONES DE ESBELTEZ"),
-          render_props_seccion(props$centro_corte, props$centro_corte_uds, "CENTRO DE CORTE")
+      
+      fluidRow(
+        # Columna izquierda: Imagen (si existe)
+        if (mostrar_imagen) {
+          column(4,
+            div(style="text-align:center; padding:20px; background:#f8fafc; border-radius:10px; border:2px solid #e2e8f0;",
+              tags$img(
+                src = imagen_path,
+                style = "max-width:100%; max-height:300px; object-fit:contain;",
+                alt = paste("Sección", familia)
+              ),
+              tags$p(
+                style="margin-top:12px; font-size:11px; color:#64748b; font-weight:600;",
+                paste("Sección tipo", familia)
+              )
+            )
+          )
+        } else NULL,
+        
+        # Columna derecha: Propiedades
+        column(if (mostrar_imagen) 8 else 12,
+          div(style="max-height:500px; overflow-y:auto;",
+            tags$span(class="props-badge", 
+                      style=paste0("background:",badge_color,";color:white;"), 
+                      familia),
+            tags$table(class="props-table",
+              render_props_seccion(props$basicas, props$basicas_uds, "PROPIEDADES BÁSICAS"),
+              render_props_seccion(props$flexion, props$flexion_uds, "FLEXIÓN"),
+              render_props_seccion(props$torsion, props$torsion_uds, "TORSIÓN"),
+              render_props_seccion(props$seccion, props$seccion_uds, "RELACIONES DE ESBELTEZ"),
+              render_props_seccion(props$centro_corte, props$centro_corte_uds, "CENTRO DE CORTE")
+            )
+          )
         )
       )
     ))
@@ -949,28 +1089,42 @@ server <- function(input, output, session) {
   observeEvent(input$btn_props2, { req(input$usar_p2, input$perf2, input$fam2); modal_propiedades(input$perf2, input$fam2, "#3b82f6") })
   observeEvent(input$btn_props3, { req(input$usar_p3, input$perf3, input$fam3); modal_propiedades(input$perf3, input$fam3, "#10b981") })
 
-  # Modal LaTeX
+  # Modal LaTeX con renderizado
   observeEvent(input$btn_latex, {
     req(datos_grafico())
     d <- datos_grafico()
     L_mm <- input$L_punto * 1000
     
     latex_all <- c()
+    latex_rendered <- c()
+    
     for (pt in d$pt_pd) {
       if (is.null(pt)) next
       tryCatch({
         res <- comp_mod$compresion(
-          perfil_nombre=pt$nombre, tipo_perfil=pt$tipo, Fy=input$Fy,
+          perfil_nombre=pt$nombre, tipo_perfil=pt$tipo, Fy=Fy(),
           Lx=L_mm, Ly=L_mm, db_manager=db_manager,
           Kx=input$Kx, Ky=input$Ky, Kz=input$Kz,
           mostrar_calculo=FALSE
         )
         if (!is.null(res$latex)) {
+          # Versión copiable (LaTeX puro)
           latex_all <- c(latex_all,
             paste0("% ========================================"),
             paste0("% Perfil: ", pt$tipo, " ", pt$nombre),
             paste0("% ========================================"),
             "", res$latex, "", ""
+          )
+          
+          # Versión renderizada (HTML con MathJax)
+          latex_rendered <- c(latex_rendered,
+            tags$div(style="margin-bottom:24px; border-left:4px solid ", pt$color, "; padding-left:16px;",
+              tags$h5(style=paste0("color:", pt$color, "; font-weight:700; margin-bottom:12px;"),
+                      paste(pt$tipo, pt$nombre)),
+              tags$div(class="latex-content",
+                HTML(gsub("\\\\", "\\", res$latex, fixed=TRUE))
+              )
+            )
           )
         }
       }, error = function(e) {
@@ -980,39 +1134,71 @@ server <- function(input, output, session) {
     
     if (length(latex_all) == 0) {
       latex_texto <- "% No hay documentación LaTeX disponible."
+      latex_rendered <- list(tags$p("No hay documentación disponible."))
     } else {
       latex_texto <- paste(latex_all, collapse="\n")
     }
     
     showModal(modalDialog(
-      title = "Documentación LaTeX — Compresión",
+      title = "Documentación de Cálculo — Compresión",
       size = "l", easyClose = TRUE,
       footer = tagList(
         tags$button(
           type="button", class="btn btn-secondary btn-sm",
           style="font-family:'JetBrains Mono',monospace;",
-          onclick="navigator.clipboard.writeText(document.getElementById('latex_output').innerText);",
-          "📋 Copiar"
+          onclick="navigator.clipboard.writeText(document.getElementById('latex_raw').innerText);",
+          "📋 Copiar LaTeX"
+        ),
+        tags$button(
+          type="button", class="btn btn-primary btn-sm",
+          onclick="document.getElementById('latex_rendered').style.display='block'; document.getElementById('latex_raw').style.display='none'; MathJax.typeset();",
+          "👁️ Ver Renderizado"
+        ),
+        tags$button(
+          type="button", class="btn btn-primary btn-sm",
+          onclick="document.getElementById('latex_rendered').style.display='none'; document.getElementById('latex_raw').style.display='block';",
+          "📝 Ver Código"
         ),
         modalButton("Cerrar")
       ),
+      
+      # Vista renderizada (inicialmente visible)
+      tags$div(
+        id="latex_rendered",
+        style="max-height:500px; overflow-y:auto; padding:16px; background:#ffffff;",
+        latex_rendered
+      ),
+      
+      # Vista código LaTeX (inicialmente oculta)
       tags$pre(
-        id="latex_output",
-        style="background:#f8fafc;color:#0f172a;padding:16px;border:2px solid #e2e8f0;
-               border-radius:10px;font-family:'JetBrains Mono',monospace;font-size:11px;
-               max-height:500px;overflow-y:auto;white-space:pre-wrap;",
+        id="latex_raw",
+        style="display:none; background:#f8fafc; color:#0f172a; padding:16px; 
+               border:2px solid #e2e8f0; border-radius:10px; 
+               font-family:'JetBrains Mono',monospace; font-size:11px;
+               max-height:500px; overflow-y:auto; white-space:pre-wrap;",
         latex_texto
-      )
+      ),
+      
+      # Trigger MathJax después de mostrar modal
+      tags$script(HTML("
+        setTimeout(function() {
+          if (window.MathJax) {
+            MathJax.typeset();
+          }
+        }, 100);
+      "))
     ))
   })
 
   # Cálculo principal
   datos_grafico <- eventReactive(input$btn_graficar, {
-    req(input$perf1, input$fam1, input$Fy, input$L_punto, input$Lb_punto)
+    req(input$perf1, input$fam1, Fy(), input$L_punto, input$Lb_punto)
     L_mm  <- input$L_punto * 1000
     Lb_mm <- input$Lb_punto * 1000
     Nu    <- input$Nu
-    Mu    <- input$Mu
+    Nu    <- input$Nu
+    Mux   <- input$Mux
+    Muy   <- input$Muy
 
     perfiles <- list(
       list(nombre=input$perf1, tipo=input$fam1, color="#ef4444")
@@ -1035,22 +1221,22 @@ server <- function(input, output, session) {
                        i, perfiles[[i]]$nombre, perfiles[[i]]$tipo, perfiles[[i]]$color))
         
         incProgress(1/(n*2), detail=paste("Compresión", perfiles[[i]]$nombre))
-        curvas_Pd[[i]] <- generar_curva_Pd(perfiles[[i]]$nombre, perfiles[[i]]$tipo, input$Fy, input$Kx, input$Ky, input$Kz)
-        puntos_Pd[[i]] <- calcular_Pd_punto(perfiles[[i]]$nombre, perfiles[[i]]$tipo, input$Fy, L_mm, input$Kx, input$Ky, input$Kz)
+        curvas_Pd[[i]] <- generar_curva_Pd(perfiles[[i]]$nombre, perfiles[[i]]$tipo, Fy(), input$Kx, input$Ky, input$Kz)
+        puntos_Pd[[i]] <- calcular_Pd_punto(perfiles[[i]]$nombre, perfiles[[i]]$tipo, Fy(), L_mm, input$Kx, input$Ky, input$Kz)
         puntos_Pd[[i]]$nombre <- perfiles[[i]]$nombre
         puntos_Pd[[i]]$tipo   <- perfiles[[i]]$tipo
         puntos_Pd[[i]]$color  <- perfiles[[i]]$color
 
         incProgress(1/(n*2), detail=paste("Flexión", perfiles[[i]]$nombre))
-        curvas_Md[[i]] <- generar_curva_Md(perfiles[[i]]$nombre, perfiles[[i]]$tipo, input$Fy)
-        puntos_Md[[i]] <- calcular_Md_punto(perfiles[[i]]$nombre, perfiles[[i]]$tipo, input$Fy, Lb_mm)
+        curvas_Md[[i]] <- generar_curva_Md(perfiles[[i]]$nombre, perfiles[[i]]$tipo, Fy())
+        puntos_Md[[i]] <- calcular_Md_punto(perfiles[[i]]$nombre, perfiles[[i]]$tipo, Fy(), Lb_mm)
         puntos_Md[[i]]$nombre <- perfiles[[i]]$nombre
         puntos_Md[[i]]$tipo   <- perfiles[[i]]$tipo
         puntos_Md[[i]]$color  <- perfiles[[i]]$color
 
-        if (Nu > 0 || Mu > 0) {
+        if (Nu > 0 || Mux > 0 || Muy > 0) {
           ints[[i]] <- calcular_interaccion(
-            perfiles[[i]]$nombre, perfiles[[i]]$tipo, input$Fy, L_mm, Lb_mm, Nu, Mu,
+            perfiles[[i]]$nombre, perfiles[[i]]$tipo, Fy(), L_mm, Lb_mm, Nu, Mux, Muy,
             input$Kx, input$Ky, input$Kz
           )
         } else {
@@ -1075,22 +1261,54 @@ server <- function(input, output, session) {
       p <- p %>%
         add_trace(data=df, x=~L_m, y=~Pd, type='scatter', mode='lines',
                   name=pt$nombre, line=list(color=pt$color, width=3),
+                  showlegend=TRUE,
                   hovertemplate=paste0("<b>",pt$nombre,"</b><br>",
                     "L: %{x:.2f} m<br>Pd: %{y:.1f} kN<extra></extra>")) %>%
         add_trace(x=input$L_punto, y=pt$Pd, type='scatter', mode='markers',
-                  name=paste0(pt$nombre," @ ",input$L_punto,"m"),
                   marker=list(size=10, color=pt$color, symbol='circle',
                     line=list(color='white', width=2)),
+                  showlegend=FALSE,
                   hovertemplate=paste0("<b>",pt$nombre,"</b><br>",
                     "L: ",input$L_punto," m<br>Pd: ",round(pt$Pd,1)," kN<extra></extra>"))
     }
     p %>% layout(
-      xaxis=list(title="L [m]", gridcolor='#f1f5f9', zeroline=FALSE),
-      yaxis=list(title="Pd [kN]", gridcolor='#f1f5f9', zeroline=FALSE),
-      plot_bgcolor='white', paper_bgcolor='white',
+      xaxis=list(
+        title="L [m]", 
+        gridcolor='#e0e0e0',
+        gridwidth=1,
+        dtick=0.5,
+        zeroline=TRUE,
+        zerolinecolor='#000000',
+        zerolinewidth=1.5,
+        showline=TRUE,
+        linecolor='#000000',
+        linewidth=1.5,
+        mirror=TRUE
+      ),
+      yaxis=list(
+        title="Pd [kN]", 
+        gridcolor='#e0e0e0',
+        gridwidth=1,
+        zeroline=TRUE,
+        zerolinecolor='#000000',
+        zerolinewidth=1.5,
+        showline=TRUE,
+        linecolor='#000000',
+        linewidth=1.5,
+        mirror=TRUE
+      ),
+      plot_bgcolor='#fffef5',
+      paper_bgcolor='white',
       font=list(family='Inter', size=11, color='#64748b'),
-      showlegend=TRUE, legend=list(x=0.02, y=0.98, bgcolor='rgba(255,255,255,0.9)',
-        bordercolor='#e2e8f0', borderwidth=1),
+      showlegend=TRUE, 
+      legend=list(
+        orientation="v",
+        yanchor="top", y=0.98,
+        xanchor="left", x=0.02,
+        bgcolor='rgba(255,255,255,0.95)',
+        bordercolor='#e2e8f0', 
+        borderwidth=1
+      ),
       hovermode='closest',
       margin=list(l=60, r=20, t=20, b=50)
     )
@@ -1104,25 +1322,88 @@ server <- function(input, output, session) {
     for (i in seq_along(d$curvas_md)) {
       df <- d$curvas_md[[i]]
       pt <- d$pt_md[[i]]
+      
+      # Verificar que Mdx existe y no es todo NA
+      if (is.null(df$Mdx) || all(is.na(df$Mdx))) next
+      
       p <- p %>%
-        add_trace(data=df, x=~Lb_m, y=~Md, type='scatter', mode='lines',
-                  name=pt$nombre, line=list(color=pt$color, width=3),
+        add_trace(data=df, x=~Lb_m, y=~Mdx, type='scatter', mode='lines',
+                  name=pt$nombre,
+                  line=list(color=pt$color, width=3),
+                  showlegend=TRUE,
                   hovertemplate=paste0("<b>",pt$nombre,"</b><br>",
-                    "Lb: %{x:.2f} m<br>Md: %{y:.1f} kN·m<extra></extra>")) %>%
-        add_trace(x=input$Lb_punto, y=pt$Md, type='scatter', mode='markers',
-                  name=paste0(pt$nombre," @ ",input$Lb_punto,"m"),
-                  marker=list(size=10, color=pt$color, symbol='circle',
-                    line=list(color='white', width=2)),
-                  hovertemplate=paste0("<b>",pt$nombre,"</b><br>",
-                    "Lb: ",input$Lb_punto," m<br>Md: ",round(pt$Md,1)," kN·m<extra></extra>"))
+                    "Lb: %{x:.2f} m<br>Mdx: %{y:.1f} kN·m<extra></extra>"))
+      
+      # Punto actual Mdx
+      if (!is.na(pt$Mdx) && !is.nan(pt$Mdx)) {
+        p <- p %>%
+          add_trace(x=input$Lb_punto, y=pt$Mdx, type='scatter', mode='markers',
+                    marker=list(size=10, color=pt$color, symbol='circle',
+                      line=list(color='white', width=2)),
+                    showlegend=FALSE,
+                    hovertemplate=paste0("<b>",pt$nombre,"</b><br>",
+                      "Lb: ",input$Lb_punto," m<br>Mdx: ",round(pt$Mdx,1)," kN·m<extra></extra>"))
+      }
+      
+      # Agregar Mdy si existe y no es NA/NaN (sin mostrar en leyenda)
+      if (!is.null(df$Mdy) && !all(is.na(df$Mdy))) {
+        p <- p %>%
+          add_trace(data=df, x=~Lb_m, y=~Mdy, type='scatter', mode='lines',
+                    line=list(color=pt$color, width=2, dash='dash'),
+                    showlegend=FALSE,
+                    hovertemplate=paste0("<b>",pt$nombre," (eje débil)</b><br>",
+                      "Lb: %{x:.2f} m<br>Mdy: %{y:.1f} kN·m<extra></extra>"))
+        
+        # Punto actual Mdy
+        if (!is.na(pt$Mdy) && !is.nan(pt$Mdy)) {
+          p <- p %>%
+            add_trace(x=input$Lb_punto, y=pt$Mdy, type='scatter', mode='markers',
+                      marker=list(size=8, color=pt$color, symbol='square',
+                        line=list(color='white', width=2)),
+                      showlegend=FALSE,
+                      hovertemplate=paste0("<b>",pt$nombre," (eje débil)</b><br>",
+                        "Lb: ",input$Lb_punto," m<br>Mdy: ",round(pt$Mdy,1)," kN·m<extra></extra>"))
+        }
+      }
     }
     p %>% layout(
-      xaxis=list(title="Lb [m]", gridcolor='#f1f5f9', zeroline=FALSE),
-      yaxis=list(title="Md [kN·m]", gridcolor='#f1f5f9', zeroline=FALSE),
-      plot_bgcolor='white', paper_bgcolor='white',
+      xaxis=list(
+        title="Lb [m]", 
+        gridcolor='#e0e0e0',
+        gridwidth=1,
+        dtick=0.5,
+        zeroline=TRUE,
+        zerolinecolor='#000000',
+        zerolinewidth=1.5,
+        showline=TRUE,
+        linecolor='#000000',
+        linewidth=1.5,
+        mirror=TRUE
+      ),
+      yaxis=list(
+        title="Md [kN·m]", 
+        gridcolor='#e0e0e0',
+        gridwidth=1,
+        zeroline=TRUE,
+        zerolinecolor='#000000',
+        zerolinewidth=1.5,
+        showline=TRUE,
+        linecolor='#000000',
+        linewidth=1.5,
+        mirror=TRUE
+      ),
+      plot_bgcolor='#fffef5',
+      paper_bgcolor='white',
       font=list(family='Inter', size=11, color='#64748b'),
-      showlegend=TRUE, legend=list(x=0.02, y=0.98, bgcolor='rgba(255,255,255,0.9)',
-        bordercolor='#e2e8f0', borderwidth=1),
+      showlegend=TRUE,
+      legend=list(
+        orientation="v",
+        yanchor="top", y=0.98,
+        xanchor="left", x=0.02,
+        bgcolor='rgba(255,255,255,0.95)',
+        bordercolor='#e2e8f0',
+        borderwidth=1
+      ),
       hovermode='closest',
       margin=list(l=60, r=20, t=20, b=50)
     )
@@ -1162,23 +1443,37 @@ server <- function(input, output, session) {
     req(datos_grafico())
     d <- datos_grafico()
     tagList(lapply(d$pt_md, function(pt) {
-      if (is.null(pt) || is.na(pt$Md)) return(NULL)
+      if (is.null(pt) || is.na(pt$Mdx)) return(NULL)
+      
       adv <- if (length(pt$advertencias) > 0)
         div(class="alert-box", paste(unlist(pt$advertencias), collapse=" | "))
+      
+      # Verificar si tiene Mdy válido
+      tiene_mdy <- !is.null(pt$Mdy) && !is.na(pt$Mdy) && !is.nan(pt$Mdy)
+      
       div(class="result-box", style=paste0("border-left-color:",pt$color,";"),
         fluidRow(
-          column(6,
+          column(12,
             tags$b(style=paste0("color:",pt$color,";font-family:'Outfit',sans-serif;font-size:13px;font-weight:700;"), pt$nombre),
             tags$br(),
-            tags$span(style="color:#94a3b8;font-size:11px;", pt$modo)
+            tags$span(style="color:#94a3b8;font-size:11px;", 
+                     if (!is.null(pt$modo_x)) pt$modo_x else "")
+          )
+        ),
+        tags$hr(style="border-color:#e2e8f0;margin:8px 0;"),
+        fluidRow(
+          column(4,
+            div(class="result-label", "Mdx [kN·m]"),
+            div(class="result-value", round(pt$Mdx,1))
           ),
-          column(3,
-            div(class="result-label", "Mp [kN·m]"),
-            div(class="result-value", style="font-size:14px;", round(pt$Mp,1))
+          column(4,
+            div(class="result-label", if (tiene_mdy) "Mdy [kN·m]" else ""),
+            div(class="result-value", if (tiene_mdy) round(pt$Mdy,1) else "")
           ),
-          column(3,
-            div(class="result-label", "Md [kN·m]"),
-            div(class="result-value", round(pt$Md,1))
+          column(4,
+            div(class="result-label", "Mpx [kN·m]"),
+            div(class="result-value", style="font-size:13px;", 
+                if (!is.null(pt$Mpx) && !is.na(pt$Mpx)) round(pt$Mpx,1) else "—")
           )
         ),
         adv
@@ -1193,7 +1488,7 @@ server <- function(input, output, session) {
     if (length(d$ints) == 0 || all(sapply(d$ints, is.null))) {
       return(div(
         style="padding:40px;text-align:center;color:#94a3b8;font-size:13px;",
-        "💡 Ingresá Nu y/o Mu para verificar la ecuación de interacción H1-1"
+        "💡 Ingresá Nu, Mux y/o Muy para verificar la ecuación de interacción H1-1"
       ))
     }
     tagList(lapply(seq_along(d$ints), function(i) {
@@ -1217,22 +1512,35 @@ server <- function(input, output, session) {
         tags$hr(style="border-color:#e2e8f0;margin:10px 0;"),
         fluidRow(
           column(3, div(class="result-label","Nu/Pd"), 
-                 div(style="color:#64748b;font-size:15px;font-weight:700;", round(ri$Nu_Pd,3))),
-          column(3, div(class="result-label","Mu/Md"), 
-                 div(style="color:#64748b;font-size:15px;font-weight:700;", round(ri$Mu_Md,3))),
-          column(3, div(class="result-label","Ratio"), 
-                 div(class=cls_ratio, round(ratio,3))),
-          column(3, div(class="result-label","Estado"),
+                 div(style="color:#64748b;font-size:15px;font-weight:700;", 
+                     sprintf("%.3f", ri$Nu_Pd))),
+          column(3, div(class="result-label","Mux/Mdx"), 
+                 div(style="color:#64748b;font-size:15px;font-weight:700;", 
+                     sprintf("%.3f", ri$Mux_Mdx))),
+          column(3, div(class="result-label","Muy/Mdy"), 
+                 div(style="color:#64748b;font-size:15px;font-weight:700;", 
+                     sprintf("%.3f", ri$Muy_Mdy))),
+          column(3, div(class="result-label","Ratio Total"), 
+                 div(class=cls_ratio, sprintf("%.3f", ratio)))
+        ),
+        fluidRow(
+          column(12, div(class="result-label", style="margin-top:8px;","Estado"),
             div(class=paste("status-badge", status_cls), etiqueta))
         ),
         tags$hr(style="border-color:#e2e8f0;margin:10px 0;"),
         fluidRow(
-          column(4, div(class="result-label","Pd [kN]"), 
-                 div(style="color:#94a3b8;font-size:12px;font-weight:600;", round(ri$Pd,1))),
-          column(4, div(class="result-label","Md [kN·m]"), 
-                 div(style="color:#94a3b8;font-size:12px;font-weight:600;", round(ri$Md,1))),
-          column(4, div(class="result-label","KL/r"), 
-                 div(style="color:#94a3b8;font-size:12px;font-weight:600;", round(ri$esbeltez_max,1)))
+          column(3, div(class="result-label","Pd [kN]"), 
+                 div(style="color:#94a3b8;font-size:12px;font-weight:600;", 
+                     sprintf("%.1f", ri$Pd))),
+          column(3, div(class="result-label","Mdx [kN·m]"), 
+                 div(style="color:#94a3b8;font-size:12px;font-weight:600;", 
+                     if (!is.na(ri$Mdx) && !is.nan(ri$Mdx)) sprintf("%.1f", ri$Mdx) else "N/A")),
+          column(3, div(class="result-label","Mdy [kN·m]"), 
+                 div(style="color:#94a3b8;font-size:12px;font-weight:600;", 
+                     if (!is.na(ri$Mdy) && !is.nan(ri$Mdy)) sprintf("%.1f", ri$Mdy) else "N/A")),
+          column(3, div(class="result-label","KL/r"), 
+                 div(style="color:#94a3b8;font-size:12px;font-weight:600;", 
+                     sprintf("%.1f", ri$esbeltez_max)))
         ),
         adv
       )
@@ -1323,7 +1631,7 @@ server <- function(input, output, session) {
         "",
         "PARÁMETROS DE CÁLCULO",
         strrep("-", 70),
-        paste0("Acero: Fy = ", input$Fy, " MPa"),
+        paste0("Acero: Fy = ", Fy(), " MPa"),
         paste0("Factores de longitud efectiva: Kx=", input$Kx, "  Ky=", input$Ky, "  Kz=", input$Kz),
         paste0("Longitud de pandeo: L = ", input$L_punto, " m  (", L_mm, " mm)"),
         paste0("Longitud de pandeo lateral: Lb = ", input$Lb_punto, " m  (", Lb_mm, " mm)"),
@@ -1336,7 +1644,7 @@ server <- function(input, output, session) {
                     paste0("PERFIL: ", pt$tipo, " ", pt$nombre), strrep("*", 70), "")
         tryCatch({
           txt <- capture.output(comp_mod$compresion(
-            perfil_nombre=pt$nombre, tipo_perfil=pt$tipo, Fy=input$Fy,
+            perfil_nombre=pt$nombre, tipo_perfil=pt$tipo, Fy=Fy(),
             Lx=L_mm, Ly=L_mm, db_manager=db_manager,
             Kx=input$Kx, Ky=input$Ky, Kz=input$Kz, mostrar_calculo=TRUE))
           lineas <- c(lineas, txt, "")
@@ -1345,7 +1653,7 @@ server <- function(input, output, session) {
         })
         tryCatch({
           txt <- capture.output(flex_mod$flexion(
-            perfil_nombre=pt$nombre, tipo_perfil=pt$tipo, Fy=input$Fy,
+            perfil_nombre=pt$nombre, tipo_perfil=pt$tipo, Fy=Fy(),
             Lb=Lb_mm, db_manager=db_manager, mostrar_calculo=TRUE))
           lineas <- c(lineas, txt, "")
         }, error=function(e) {
@@ -1356,6 +1664,15 @@ server <- function(input, output, session) {
       writeLines(lineas, file)
     }
   )
+}
+
+# ==============================================================================
+# CONFIGURACIÓN DE RECURSOS ESTÁTICOS
+# ==============================================================================
+
+# Configurar carpeta img/ para servir imágenes
+if (dir.exists("img")) {
+  addResourcePath("img", "img")
 }
 
 # ==============================================================================
